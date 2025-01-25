@@ -169,7 +169,14 @@ static void updateMasterVol(int unitID, chanend ?c_mix_ctl)
                         multOutPtr[i-1] = x;
                         update_dac_volume((0), volsOut[0]);
                         update_dac_volume((1), volsOut[0]);
-                    }
+                    }                       
+                        unsafe
+                            {
+                                unsigned regVal;
+                                uc_audiohw2 <: (unsigned) 2;
+                                uc_audiohw2 <: 0x40;
+                                uc_audiohw2 :> regVal;
+                            }
 #endif
                 }
             }
