@@ -15,8 +15,8 @@
 #include "dbcalc.h"
 #include "xua_commands.h"
 
-#include <math.h>
-#include <debug_print.h>
+//#include <math.h>
+//#include <debug_print.h>
 
 #define CS_XU_MIXSEL (0x06)
 
@@ -122,18 +122,11 @@ static unsigned longMul(unsigned a, unsigned b, int prec)
 }
 
 unsafe chanend uc_audiohw2;
-
-static void update_dac_volume(/*chanend c_audiohw, */ int channel, int volume){
-    //split total volume into analog and digital volume. 
-    //Analog volume has priority and digital volume trims the remaining gain. 
-    int const A_RES = 512, D_RES = 128, A_RANGE = (-24 *256);
-    float AVol = 0, DVol = 0, Vol_dB = volume;
-    AVol = ceil(((Vol_dB >= A_RANGE) ? Vol_dB : A_RANGE) / A_RES) * A_RES;
-    DVol = ceil((Vol_dB - AVol) / D_RES) * D_RES;
-    //debug_printf("Ch:%d\tVol_dB:\t%x\tA:\t%x\tD:\t%x\n", channel, (int)Vol_dB, (int)AVol, (int)DVol);
-    printf("Ch:%d\tVol_dB:\t%f\tA:\t%f\tD:\t%f\n", channel, (float)Vol_dB/256, (float)AVol/256, (float)DVol/256);
-    unsafe { debug_printf("uc_audiohw2 = 0x%x\t\n", (unsigned)uc_audiohw2); }
-}
+extern void AudioHwRemote_Volume_Update(chanend c_audiohwremote, unsigned reg, unsigned val);
+/* User defined Volume Update API 
+ * 
+ */
+//extern void update_dac_volume(chanend c, int channel, int volume);
 
 /* Update master volume i.e. i.e update weights for all channels */
 static void updateMasterVol(int unitID, chanend ?c_mix_ctl)
@@ -167,8 +160,8 @@ static void updateMasterVol(int unitID, chanend ?c_mix_ctl)
                     {
                         unsigned int * unsafe multOutPtr = multOut;
                         multOutPtr[i-1] = x;
-                        update_dac_volume((0), volsOut[0]);
-                        update_dac_volume((1), volsOut[0]);
+                        AudioHwRemote_Volume_Update((chanend)uc_audiohw2, (0), volsOut[0]);
+                        AudioHwRemote_Volume_Update((chanend)uc_audiohw2, (1), volsOut[0]);
                     }                       
                         unsafe
                             {
@@ -255,7 +248,7 @@ static void updateVol(int unitID, int channel, chanend ?c_mix_ctl)
                 {
                     unsigned int * unsafe multOutPtr = multOut;
                     multOutPtr[channel-1] = x;
-                    update_dac_volume((channel-1), volsOut[channel]);
+                    AudioHwRemote_Volume_Update((chanend)uc_audiohw2, (channel-1), volsOut[channel]);
                 }
 #endif
                 break;
