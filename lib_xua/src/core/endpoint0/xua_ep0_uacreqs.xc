@@ -15,6 +15,9 @@
 #include "dbcalc.h"
 #include "xua_commands.h"
 
+#include <math.h>
+#include <debug_print.h>
+
 #define CS_XU_MIXSEL (0x06)
 
 /* From decouple.xc */
