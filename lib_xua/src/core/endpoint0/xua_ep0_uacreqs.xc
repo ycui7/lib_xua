@@ -121,12 +121,10 @@ static unsigned longMul(unsigned a, unsigned b, int prec)
     return ret;
 }
 
-unsafe chanend uc_audiohw2;
-extern void AudioHwRemote_Volume_Update(chanend c_audiohwremote, unsigned reg, unsigned val);
-/* User defined Volume Update API 
- * 
- */
-//extern void update_dac_volume(chanend c, int channel, int volume);
+#ifdef SC_CLEARSOUND_DAC
+    unsafe chanend uc_audiohw2;
+    extern void AudioHwRemote_Volume_Update(chanend c_audiohwremote, unsigned reg, unsigned val);
+#endif
 
 /* Update master volume i.e. i.e update weights for all channels */
 static void updateMasterVol(int unitID, chanend ?c_mix_ctl)
@@ -159,17 +157,13 @@ static void updateMasterVol(int unitID, chanend ?c_mix_ctl)
                     unsafe
                     {
                         unsigned int * unsafe multOutPtr = multOut;
-                        multOutPtr[i-1] = x;
+#ifdef SC_CLEARSOUND_DAC
                         AudioHwRemote_Volume_Update((chanend)uc_audiohw2, (0), volsOut[0]);
                         AudioHwRemote_Volume_Update((chanend)uc_audiohw2, (1), volsOut[0]);
+#else
+                        multOutPtr[i-1] = x;
+#endif
                     }                       
-                        unsafe
-                            {
-                                unsigned regVal;
-                                uc_audiohw2 <: (unsigned) 2;
-                                uc_audiohw2 <: 0x40;
-                                uc_audiohw2 :> regVal;
-                            }
 #endif
                 }
             }
@@ -247,8 +241,11 @@ static void updateVol(int unitID, int channel, chanend ?c_mix_ctl)
                 unsafe
                 {
                     unsigned int * unsafe multOutPtr = multOut;
-                    multOutPtr[channel-1] = x;
+#ifdef SC_CLEARSOUND_DAC
                     AudioHwRemote_Volume_Update((chanend)uc_audiohw2, (channel-1), volsOut[channel]);
+#else
+                    multOutPtr[channel-1] = x;
+#endif
                 }
 #endif
                 break;
