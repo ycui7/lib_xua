@@ -419,6 +419,11 @@ void usb_audio_io(chanend ?c_aud_in,
 #define USER_MAIN_CORES
 #endif
 
+#ifndef USER_MAIN_FUNCTION_DECLARATIONS
+#define USER_MAIN_FUNCTION_DECLARATIONS
+#endif
+
+    USER_MAIN_FUNCTION_DECLARATIONS
 
 /* Main for USB Audio Applications */
 int main()
@@ -508,6 +513,7 @@ int main()
 
     par
     {
+    
         USER_MAIN_CORES
 
 #if (((XUA_SYNCMODE == XUA_SYNCMODE_SYNC  && !XUA_USE_SW_PLL) || XUA_SPDIF_RX_EN || XUA_ADAT_RX_EN))
