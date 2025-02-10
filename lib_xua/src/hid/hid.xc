@@ -9,7 +9,7 @@
 #include "xua_hid.h"
 #include "xua_hid_report.h"
 
-#define DEBUG_UNIT HID_XC
+//#define DEBUG_UNIT HID_XC
 #define DEBUG_PRINT_ENABLE_HID_XC 0
 #include "debug_print.h"
 
