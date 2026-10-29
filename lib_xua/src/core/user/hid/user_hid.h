@@ -1,4 +1,4 @@
-// Copyright 2013-2024 XMOS LIMITED.
+// Copyright 2013-2026 XMOS LIMITED.
 // This Software is subject to the terms of the XMOS Public Licence: Version 1.
 
 /**
@@ -31,7 +31,9 @@ typedef struct hidEvent_t {
   unsigned value;
 } hidEvent_t;
 
+#ifndef HID_MAX_DATA_BYTES
 #define HID_MAX_DATA_BYTES ( 4 )
+#endif
 #define HID_EVENT_INVALID_ID ( 0x100 )
 
 /**

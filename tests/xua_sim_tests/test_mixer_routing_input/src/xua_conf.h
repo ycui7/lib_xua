@@ -1,4 +1,4 @@
-// Copyright 2016-2024 XMOS LIMITED.
+// Copyright 2016-2026 XMOS LIMITED.
 // This Software is subject to the terms of the XMOS Public Licence: Version 1.
 #ifndef _XUA_CONF_H_
 #define _XUA_CONF_H_
@@ -10,13 +10,13 @@
 
 #define EXCLUDE_USB_AUDIO_MAIN
 
-#define MIXER                   (1)
-#define MAX_MIX_COUNT           (8)
+#define XUA_MIXER_EN                   (1)
+#define XUA_MAX_MIX_COUNT           (8)
 
 #define UAC_FORCE_FEEDBACK_EP   (0)
 #define XUA_NUM_PDM_MICS 0
-#define XUD_TILE 1
-#define AUDIO_IO_TILE 0
+#define XUA_XUD_TILE_NUM 0
+#define XUA_AUDIO_IO_TILE_NUM 0
 
 #ifndef MCLK_441
 #define MCLK_441 (512 * 44100)

@@ -1,4 +1,4 @@
-// Copyright 2024 XMOS LIMITED.
+// Copyright 2024-2026 XMOS LIMITED.
 // This Software is subject to the terms of the XMOS Public Licence: Version 1.
 
 #include <xs1.h>
@@ -13,14 +13,14 @@
 #include "midiinparse.h"
 #include "midioutparse.h"
 
-on tile[MIDI_TILE] :  port p_midi_tx                        = XS1_PORT_4C;
+on tile[XUA_MIDI_TILE_NUM] :  port p_midi_tx                        = XS1_PORT_4C;
 #if(MIDI_RX_PORT_WIDTH == 4)
-on tile[MIDI_TILE] :  buffered in port:4 p_midi_rx          = XS1_PORT_1F;
+on tile[XUA_MIDI_TILE_NUM] :  buffered in port:4 p_midi_rx          = XS1_PORT_1F;
 #elif(MIDI_RX_PORT_WIDTH == 1)
-on tile[MIDI_TILE] :  buffered in port:1 p_midi_rx          = XS1_PORT_1F;
+on tile[XUA_MIDI_TILE_NUM] :  buffered in port:1 p_midi_rx          = XS1_PORT_1F;
 #endif
 #define CLKBLK_MIDI  XS1_CLKBLK_2
-on tile[MIDI_TILE] : clock    clk_midi                      = CLKBLK_MIDI;
+on tile[XUA_MIDI_TILE_NUM] : clock    clk_midi                      = CLKBLK_MIDI;
 
 #define MAX_TEST_COMMANDS       100
 #define TEST_COMMAND_FILE_TX   "midi_tx_cmds.txt"

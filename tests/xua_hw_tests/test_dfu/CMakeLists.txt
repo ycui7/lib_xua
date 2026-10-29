@@ -5,8 +5,7 @@ project(dfu_test)
 set(XMOS_SANDBOX_DIR ${CMAKE_CURRENT_LIST_DIR}/../../../..)
 
 set(APP_HW_TARGET xk-audio-316-mc.xn)
-set(APP_DEPENDENT_MODULES "lib_xua"
-                          "lib_board_support(1.1.0)")
+include(${CMAKE_CURRENT_LIST_DIR}/../../../examples/deps.cmake)
 set(APP_INCLUDES src)
 
 set(COMMON_FLAGS -O3
@@ -38,6 +37,34 @@ set(APP_COMPILER_FLAGS_hid ${COMMON_FLAGS}
                            -DI2S_CHANS_ADC=8
                            -DI2S_CHANS_DAC=8
                            -DHID_CONTROLS=1)
+
+set(APP_COMPILER_FLAGS_control ${COMMON_FLAGS}
+                           -DBCD_DEVICE=0x0102
+                           -DNUM_USB_CHAN_IN=8
+                           -DNUM_USB_CHAN_OUT=8
+                           -DI2S_CHANS_ADC=8
+                           -DI2S_CHANS_DAC=8
+                           -DXUA_USB_CONTROL_DESCS=1)
+
+set(APP_COMPILER_FLAGS_control_not_winusb ${COMMON_FLAGS}
+                           -DBCD_DEVICE=0x0102
+                           -DNUM_USB_CHAN_IN=8
+                           -DNUM_USB_CHAN_OUT=8
+                           -DI2S_CHANS_ADC=8
+                           -DI2S_CHANS_DAC=8
+                           -DXUA_USB_CONTROL_DESCS=1
+                           -DENUMERATE_CONTROL_INTF_AS_WINUSB=0)
+
+set(APP_COMPILER_FLAGS_i0o2_lp  ${COMMON_FLAGS}
+                                -DBCD_DEVICE=0x0103
+                                -DNUM_USB_CHAN_IN=0
+                                -DNUM_USB_CHAN_OUT=2
+                                -DI2S_CHANS_ADC=0
+                                -DI2S_CHANS_DAC=2
+                                -DXUD_THREAD_MODE_FAST_EN=0
+                                -DXUA_CHAN_BUFF_CTRL=1
+                                -DXUD_PRIORITY_HIGH=1
+                                -DXUA_LOW_POWER_NON_STREAMING=1) # low power DAC config, minus tile and switch PD
 
 
 # baseline configs for the testcase

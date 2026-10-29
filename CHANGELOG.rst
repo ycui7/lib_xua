@@ -2,16 +2,199 @@ lib_xua change log
 ==================
 
 UNRELEASED
-----------
+---------
 
+  * FIXED:     dsdMode is not reset after switching playback from Native DSD back to PCM
+  * CHANGED:   Improve documentation for audio clock and port configuration
+  * CHANGED:   Mixer configuration defines renamed for consistency with the
+    other lib_xua options: ``MIXER`` -> ``XUA_MIXER_EN``, ``MAX_MIX_COUNT`` ->
+    ``XUA_MAX_MIX_COUNT``, ``MIX_INPUTS`` -> ``XUA_MIX_INPUTS``,
+    ``MIN_MIXER_VOLUME`` -> ``XUA_MIN_MIXER_VOLUME``,
+    ``MAX_MIXER_VOLUME`` -> ``XUA_MAX_MIXER_VOLUME``,
+    ``VOLUME_RES_MIXER`` -> ``XUA_VOLUME_RES_MIXER``,
+    ``OUT_VOLUME_IN_MIXER`` -> ``XUA_OUT_VOLUME_IN_MIXER``,
+    ``OUT_VOLUME_AFTER_MIX`` -> ``XUA_OUT_VOLUME_AFTER_MIX``,
+    ``IN_VOLUME_IN_MIXER`` -> ``XUA_IN_VOLUME_IN_MIXER``, and
+    ``IN_VOLUME_AFTER_MIX`` -> ``XUA_IN_VOLUME_AFTER_MIX``. The old names
+    are still accepted for compatibility.
+
+5.5.0
+-----
+
+  * ADDED: Configurable output channel layout macros for populating UAC2
+    ``bmChannelConfig`` and UAC1 ``wChannelConfig`` descriptor fields
+  * FIXED: Control and DFU descriptors ordering in UAC1.0 Config descriptor
+  * FIXED: Account for ADAT/SPDIF TX channels in samplesOut sizing in
+    xua_audiohub
+  * CHANGED:  DFU features now supported by ``lib_dfu``
+  * CHANGED:  DFU now notified of USB enumeration progress by calling
+    dfu_set_configured_state() when USB host sends SET_CONFIGURATION request
+
+  * Changes to dependencies:
+
+    - lib_dfu: 2.0.0 -> 2.1.0
+
+5.4.0
+-----
+
+  * ADDED:    DFU types now common to ``lib_dfu``
+  * CHANGED:  Moved `xmosdfu` application to ``lib_dfu``
+
+  * Changes to dependencies:
+
+    - lib_dfu: Added dependency 2.0.0
+
+    - lib_mic_array: 6.0.0 -> 7.0.0
+
+    - lib_xcore_math: 2.4.0 -> 2.4.1
+
+5.3.0
+-----
+
+  * ADDED: Optional defines and handler code to allow insertion of user
+    endpoints. This allows building composite USB Audio devices such as CDC.
+    Check the `Other defines` section in the documents for more details.
+  * ADDED:     Optional ``XUA_USER_FUNCTION_CALL_PRE_BUFFER`` define to allow
+    running of user code before XUA buffer starts in the ``main()`` function.
+    This may be used to initialise global channel ends or interfaces.
+  * ADDED:    Support for generating fixed clock using the application PLL for
+    xcore.ai targets
+  * CHANGED:   ``FB_USE_REF_CLOCK`` renamed to ``XUA_FB_USE_REF_CLOCK`` and
+    added ability to define rational clock ratio between master and ref clock
+  * CHANGED:   Use lib_mic_array's new default API
+  * CHANGED:   Migrated Windows USB DFU host application from 32 bit to 64 bit
+  * FIXED:     Unused variable warnings when XUA_USB_EN = 0
+
+  * Changes to dependencies:
+
+    - lib_locks: 2.3.2 -> 2.4.0
+
+    - lib_mic_array: 5.5.0 -> 6.0.0
+
+    - lib_sw_pll: 2.4.0 -> 2.4.1
+
+    - lib_xassert: 4.3.1 -> 4.3.2
+
+    - lib_xud: 4.0.0 -> 4.0.1
+
+5.2.0
+-----
+
+  * ADDED:     Support for optional include header ``xua_conf_tasks.h`` with the
+    same functionality as ``xua_conf_cores.h`` i.e. to allow insertion of tasks
+    into the ``main()`` function (``xua_conf_cores.h`` to be deprecated in a
+    future release)
+  * ADDED:     Support for define ``USER_MAIN_TASKS`` with the same
+    functionality as ``USER_MAIN_CORES`` i.e. to allow insertion of tasks into
+    the `main()` function (``USER_MAIN_CORES`` to be deprecated in a future
+    release)
+  * ADDED:     Support for high bandwidth ISO endpoints
+  * ADDED:     Delay in ``AudioHub()`` to allow time for the audio PLL to lock
+    and master clock stabilise
+  * ADDED:     Change to reset `Software` PLL DCO setting to midpoint when
+    there's a change in clock source
+  * ADDED:     Where possible ``_TILE_NUM`` defines are now derived from
+    ``PORT_`` defines in the application XN file
+  * ADDED:    Check for I2S timing violation. Can be enabled by running cmake
+    with -DENABLE_I2S_TIMING_CHECK=ON
+  * CHANGED:   When `Software PLL` is enabled, report external clock as invalid
+    when the USB sampling frequency doesn't match the digital input sampling
+    frequency
+  * CHANGED:   ``AUDIO_IO_TILE`` renamed to ``XUA_AUDIO_IO_TILE_NUM``
+  * CHANGED:   ``XUA_TILE`` renamed to ``XUA_XUD_TILE_NUM``
+  * CHANGED:   ``MIDI_TILE`` renamed to ``XUA_MIDI_TILE_NUM``
+  * CHANGED:   ``SPDIF_TX_TILE`` renamed to ``XUA_SPDIF_TX_TILE_NUM``
+  * CHANGED:   ``PDM_TILE`` renamed to ``XUA_MIC_PDM_TILE_NUM``
+  * CHANGED:   ``PLL_REF_TILE`` renamed to ``XUA_PLL_REF_TILE_NUM``
+  * CHANGED:   Supported optional configuration header files
+    ``user_main_cores.h``, ``user_main_declarations.h`` and
+    ``user_main_globals.h`` should now be named ``xua_conf_cores.h``,
+    ``xua_conf_declarations.h`` and ``xua_conf_globals.h`` respectively
+  * CHANGED:   Renamed AN00246 example to app_xua
+  * CHANGED:   Mixer optimisation to do output volume control after mixing,
+    instead of in GiveSamplesToDevice()
+  * CHANGED:   Mixer optimisation to speed up sample exchange between mixer and
+    audiohub, to fix I2S timing violation causing intermittent test failures
+  * CHANGED:  Channel protocol between audiohub and SDFIF TX extended to
+    communicate SPDIF audio sample length
+  * FIXED:     Issue with master clock not present for digital receive (only)
+    configs when using the `Software PLL`
+  * FIXED:     Reset `Software PLL` phase/frequency detector when digital clock
+    becomes invalid to prevent incorrect error input to sigma-delta modulator
+  * FIXED:     Incorrect values of bLockDelayUnits and bLockDelay in async mode
+  * REMOVED:   Application notes AN00247 and AN00248 from examples folder.
+    Instead see https://www.xmos.com/application-notes/
+
+  * Changes to dependencies:
+
+    - lib_locks: 2.3.1 -> 2.3.2
+
+    - lib_logging: 3.3.1 -> 3.4.0
+
+    - lib_spdif: 6.2.1 -> 7.0.0
+
+    - lib_xud: 3.0.1 -> 4.0.0
+
+5.1.0
+-----
+
+  * ADDED:     Enumeration of vendor specific control interface as WinUSB
+    compatible on Windows. Can be disabled by defining
+    ENUMERATE_CONTROL_INTF_AS_WINUSB to 0
+  * ADDED:     Optional user_main_declarations.h and user_main_cores.h headers
+    to allow insertion of declarations and tasks for extending main()
+  * ADDED:     XUA_LOW_POWER_NON_STREAMING define allowing low-power state when
+    not streaming which stops I2S and provides additional user callback
+  * ADDED:     Calls to user functions XUA_UserSuspendPowerDown() and
+    XUA_UserResumePowerUp() to allow user code to run when the device is
+    suspended or resumed (default implementations are empty)
+  * ADDED:     Documentation of XUA_CHAN_BUFF_CTRL
+  * CHANGED:   Suspend/resume notification from lib_xud (added in v3.0.0) used
+    rather than overriding XUD_UserSuspend() and XUD_UserResume()
   * CHANGED:   Made `p_off_mclk` nullable for XUA_Buffer; this port is now only
     required either in configurations using Synchronous mode and using the
     application PLL to clock the USB buffers, or for configurations using
-    Asynchronous mode and using the reference clock to clock the USB buffers.
-  * FIXED:     `p_mclk_in` and `clk_audio_bclk` now correctly nullable when I2S
+    Asynchronous mode and using the reference clock to clock the USB buffers
+  * CHANGED:   Renamed USB_CONTROL_DESCS define to XUA_USB_CONTROL_DESCS
+  * CHANGED:   AN00248 updated so that it uses lib_xua main() instead of custom
+    main()
+  * CHANGED:   UserAudioStreamStart and UserAudioStreamStop replaced by single
+    UserAudioStreamState(in, out) API with arguments indicating whether input or
+    output streams are active
+  * CHANGED:   Functionality associated with AUDIO_CLASS_FALLBACK and
+    FULL_SPEED_AUDIO_2 moved to XUA_AUDIO_CLASS_FS and XUA_AUDIO_CLASS_HS
+  * CHANGED:   Simplification of USB string table handling
+  * CHANGED:   lib_xud's USB_TILE define derived from lib_xua's XUD_TILE define
+    (using xud_conf.h)
+  * FIXED:     wMaxPacketSize for MIDI bulk IN and OUT endpoints incorrectly set
+    when running at full-speed
+  * FIXED:     `p_mclk_in` and `clk_audio_bclk` not correctly nullable when I2S
     not in use.
-  * FIXED:     Corrected `clk_audio_mclk` nullability for XUA_AudioHub; this
-    clock block is only required for configurations with ADAT TX
+  * FIXED:     Incorrect `clk_audio_mclk` nullability for XUA_AudioHub; this
+    clock block is only required for configurations with ADAT or SPDIF TX
+  * FIXED:     Compilation error with NUM_USB_CHAN_IN=0, NUM_USB_CHAN_OUT=0 and
+    HID_CONTROLS=1
+  * FIXED:     HID functionality with AUDIO_CLASS = 1
+  * FIXED:     Alignment issue with HID_Descriptor memory that was causing
+    USB_GET_DESCRIPTOR for the HID interface to fail leading to failing USB3CV
+    HID Descriptor test
+  * FIXED:     Device enumeration error when both XUA_DFU_EN and
+    XUA_USB_CONTROL_DESCS enabled
+  * FIXED:     UAC2 descriptors during full-speed operation
+  * FIXED:     Compiler error when PDM mics used and EXCLUDE_USB_AUDIO_MAIN is
+    not defined.
+  * FIXED:     Guard on epTypeTableOut[] declaration where incorrect EP type for
+    audio out endpoint occurred if additional custom endpoints are added
+  * FIXED:     String descriptors not updated when using runtime API (#406)
+  * FIXED:     Strings relating to items such as Clock Selector, Clock, DFU, etc
+    not updated when using run time API function setVendorString()
+  * REMOVED:   Support for iAP EA Native Transport endpoints
+
+  * Changes to dependencies:
+
+    - lib_sw_pll: 2.3.1 -> 2.4.0
+
+    - lib_xud: 2.4.1 -> 3.0.1
 
 5.0.0
 -----
@@ -69,7 +252,7 @@ UNRELEASED
 
     - lib_xcore_math: Added dependency 2.4.0
 
-    - lib_xud: 2.3.2 -> 2.4.0
+    - lib_xud: 2.3.2 -> 2.4.1
 
 4.2.0
 -----
@@ -475,28 +658,33 @@ Legacy release history
 
 7.4.1
 -----
+
     - FIXED:   Exception due to null chanend when using NO_USB
 
 7.4.0
 -----
+
     - FIXED:   PID_DFU now based on AUDIO_CLASS. This potentially caused issues
       with UAC1 DFU
 
 
 7.3.0
 -----
+
     - CHANGED:    Example OSX DFU host app updated to now take PID as runtime
       argument. This enabled multiple XMOS devices to be attached to the host
       during DFU process
 
 7.2.0
 -----
+
     - ADDED:      DFU to UAC1 descriptors (guarded by DFU and FORCE_UAC1_DFU)
     - FIXED:      Removed 'reinterpretation to type of larger alignment' warnings
     - FIXED:      DFU flash code run on tile[0] even if XUD_TILE and AUDIO_IO_TILE are not 0
 
 7.1.0
 -----
+
     - ADDED:      UserBufferManagementInit() to reset any state required in UserBufferManagement()
     - ADDED:      I2S output up-sampling (enabled when AUD_TO_USB_RATIO is > 1)
     - ADDED:      PDM Mic decimator output rate can now be controlled independently (via AUD_TO_MICS_RATIO)
@@ -506,10 +694,12 @@ Legacy release history
 
 7.0.1
 -----
+
     - FIXED:      PDM microphone decimation issue at some sample rates caused by integration
 
 7.0.0
 ------
+
     - ADDED:      I2S down-sampling (I2S_DOWNSAMPLE_FACTOR)
     - ADDED:      I2S resynchronisation when in slave mode (CODEC_MASTER=1)
     - CHANGED:    Various memory optimisations when MAX_FREQ = MIN_FREQ
@@ -521,6 +711,7 @@ Legacy release history
 
 6.30.0
 ------
+
     - FIXED:   Number of PDM microphone channels configured now based on NUM_PDM_MICS define
     (previously hard-coded)
     - FIXED:   PDM microphone clock divide now based MCLK defines (previously hard-coded)
@@ -528,6 +719,7 @@ Legacy release history
 
 6.20.0
 ------
+
     - FIXED:   Intra-frame sample delays of 1/2 samples on input streaming in TDM mode
     - FIXED:   Build issue with NUM_USB_CHAN_OUT set to 0 and MIXER enabled
     - FIXED:   SPDIF_TX_INDEX not defined build warning only emitted when SPDIF_TX defined
@@ -535,16 +727,19 @@ Legacy release history
 
 6.19.0
 ------
+
     - FIXED:   SPDIF_TX_INDEX not defined build warning only emitted when SPDIF_TX defined
     - FIXED:   Failure to enter DFU mode when configured without input volume control
 
 6.18.1
 ------
+
     - ADDED:   Vendor Specific control interface added to UAC1 descriptors to allow control of
                 XVSM params from Windows (via lib_usb)
 
 6.18.0
 ------
+
     - ADDED:   Call to VendorRequests() and VendorRequests_Init() to Endpoint 0
     - ADDED:   VENDOR_REQUESTS_PARAMS define to allow for custom parameters to VendorRequest calls
     - FIXED:   FIR gain compensation set appropriately in lib_mic_array usage
@@ -552,6 +747,7 @@ Legacy release history
 
 6.16.0
 ------
+
     - ADDED:      Call to UserBufferManagement()
     - ADDED:      PDM_MIC_INDEX in devicedefines.h and usage
     - CHANGED:    pdm_buffer() task now combinable
@@ -561,10 +757,12 @@ Legacy release history
 
 6.15.2
 ------
+
     - FIXED:   interrupt.h (used in audio buffering) now compatible with xCORE-200 ABI
 
 6.15.1
 ------
+
     - FIXED:   DAC data mis-alignment issue in TDM/I2S slave mode
     - CHANGED:    Updates to support API changes in lib_mic_array version 2.0
 
@@ -578,6 +776,7 @@ Legacy release history
 
 6.14.0
 ------
+
     - ADDED:      Support for for master-clock/sample-rate divides that are not a power of 2
                   (i.e. 32kHz from 24.567MHz)
     - ADDED:      Extended available sample-rate/master-clock ratios. Previous restriction was <=
@@ -597,6 +796,7 @@ Legacy release history
 
 6.13.0
 ------
+
     - ADDED:      Device now uses implicit feedback when input stream is available (previously explicit
                   feedback pipe always used). This saves chanend/EP resources and means less processing
                   burden for the host. Previous behaviour available by enabling UAC_FORCE_FEEDBACK_EP
@@ -615,24 +815,29 @@ Legacy release history
 
 6.12.6
 ------
+
     - FIXED:   Build error when DFU is disabled
     - FIXED:   Build error when I2S_CHANS_ADC or I2S_CHANS_DAC set to 0 and CODEC_MASTER enabled
 
 6.12.5
 ------
+
     - FIXED:   Stream issue when NUM_USB_CHAN_IN < I2S_CHANS_ADC
 
 6.12.4
 ------
+
     - FIXED:   DFU fail when DSD enabled and USB library not running on tile[0]
 
 6.12.3
 ------
+
     - FIXED:   Method for storing persistent state over a DFU reboot modified to improve resilience
                   against code-base and tools changes
 
 6.12.2
 ------
+
     - FIXED:   Reboot code (used for DFU) failure in tools versions > 14.0.2 (xCORE-200 only)
     - FIXED:   Run-time exception in mixer when MAX_MIX_COUNT > 0 (xCORE-200 only)
     - FIXED:   MAX_MIX_COUNT checked properly for mix strings in string table
@@ -645,12 +850,14 @@ Legacy release history
 
 6.12.1
 ------
+
     - FIXED:   Fixes to TDM input timing/sample-alignment when BCLK=MCLK
     - FIXED:   Various minor fixes to allow ADAT_RX to run on xCORE 200 MC AUDIO hardware
     - CHANGED:    Moved from old SPDIF define to SPDIF_TX
 
 6.12.0
 ------
+
     - ADDED:      Checks for XUD_200_SERIES define where required
     - FIXED:   Run-time exception due to decouple interrupt not entering correct issue mode
                   (affects XCORE-200 only)
@@ -665,10 +872,12 @@ Legacy release history
 
 6.11.3
 ------
+
     - FIXED:  (Major) Streaming issue when mixer not enabled (introduced in 6.11.2)
 
 6.11.2
 ------
+
     - FIXED:   (Major) Enumeration issue when MAX_MIX_COUNT > 0 only. Introduced in mixer
                   optimisations in 6.11.0. Only affects designs using mixer functionality.
     - FIXED:   (Normal) Audio buffering request system modified such that the mixer output is
@@ -687,6 +896,7 @@ Legacy release history
 
 6.11.1
 ------
+
     - ADDED:      ADAT transmit functionality, including SMUX. See ADAT_TX and ADAT_TX_INDEX.
     - FIXED:   (Normal) Build issue with CODEC_MASTER (xCore is I2S slave) enabled
     - FIXED:   (Minor) Channel ordering issue in when TDM and CODEC_MASTER mode enabled
@@ -695,6 +905,7 @@ Legacy release history
 
 6.11.0
 ------
+
     - ADDED:      Basic TDM I2S functionality added. See I2S_CHANS_PER_FRAME and I2S_MODE_TDM
     - CHANGED:    Various optimisations in 'mixer' core to improve performance for higher
                   channel counts including the use of XC unsafe pointers instead of inline ASM
@@ -704,12 +915,14 @@ Legacy release history
 
 6.10.0
 ------
+
     - CHANGED:    Endpoint management for iAP EA Native Transport now merged into buffer() core.
                   Previously was separate core (as added in 6.8.0).
     - CHANGED:    Minor optimisation to I2S port code for inputs from ADC
 
 6.9.0
 -----
+
     - ADDED:      ADAT S-MUX II functionality (i.e. 2 channels at 192kHz) - Previously only S-MUX
                   supported (4 channels at 96kHz).
     - ADDED:      Explicit build warnings if sample rate/depth & channel combination exceeds
@@ -729,6 +942,7 @@ Legacy release history
 
 6.8.0
 -----
+
     - ADDED:      Evaluation support for iAP EA Native Transport endpoints
     - FIXED:   (Minor) Reverted change in 6.5.1 release where sample rate listing in Audio Class
                   1.0 descriptors was trimmed (previously 4 rates were always reported). This change
@@ -743,7 +957,6 @@ Legacy release history
     - FIXED:    (Minor) Ordering of level data from the device now matches channel ordering into
                   mixer (previously the device input data and the stream from host were swapped)
     - CHANGED:    Level meter buffer naming now resemble functionality
-
 
 Legacy release history
 ----------------------

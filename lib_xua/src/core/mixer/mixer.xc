@@ -1,4 +1,4 @@
-// Copyright 2011-2024 XMOS LIMITED.
+// Copyright 2011-2026 XMOS LIMITED.
 // This Software is subject to the terms of the XMOS Public Licence: Version 1.
 #define XASSERT_UNIT MIXER
 #include "xassert.h"
@@ -17,9 +17,9 @@
 #include "xc_ptr.h"
 #endif
 
-#if (MIXER)
+#if (XUA_MIXER_EN)
 
-#if (OUT_VOLUME_IN_MIXER)
+#if (XUA_OUT_VOLUME_IN_MIXER)
 static unsigned int multOut_array[NUM_USB_CHAN_OUT + 1];
 unsafe
 {
@@ -27,7 +27,7 @@ unsafe
 }
 #endif
 
-#if (IN_VOLUME_IN_MIXER)
+#if (XUA_IN_VOLUME_IN_MIXER)
 static unsigned int multIn_array[NUM_USB_CHAN_IN + 1];
 unsafe
 {
@@ -49,9 +49,19 @@ static unsigned abs(int x)
 }
 #endif
 
-static const int SOURCE_COUNT = NUM_USB_CHAN_OUT + NUM_USB_CHAN_IN + MAX_MIX_COUNT + 1;
+static const int SOURCE_COUNT = NUM_USB_CHAN_OUT + NUM_USB_CHAN_IN + XUA_MAX_MIX_COUNT + 1;
 
-static int samples_array[NUM_USB_CHAN_OUT + NUM_USB_CHAN_IN + MAX_MIX_COUNT + 1]; /* One larger for an "off" channel for mixer sources" */
+static int samples_array[NUM_USB_CHAN_OUT + NUM_USB_CHAN_IN + XUA_MAX_MIX_COUNT + 1]; /* One larger for an "off" channel for mixer sources" */
+#if (XUA_OUT_VOLUME_IN_MIXER && XUA_OUT_VOLUME_AFTER_MIX)
+/**
+ * vol_ctld_samples_to_device_array[NUM_USB_CHAN_OUT]
+ *
+ * Only used when XUA_OUT_VOLUME_IN_MIXER && XUA_OUT_VOLUME_AFTER_MIX
+ * Contains post-mix, post-volume-control samples that are stored linearly for giving to audio
+ * in GiveSamplesToDevice()
+ */
+static int vol_ctld_samples_to_device_array[NUM_USB_CHAN_OUT];
+#endif
 static int samples_to_host_map_array[NUM_USB_CHAN_IN];
 static int samples_to_device_map_array[NUM_USB_CHAN_OUT];
 
@@ -60,12 +70,15 @@ unsafe
     int volatile * const unsafe ptr_samples = samples_array;
     int volatile * const unsafe samples_to_host_map = samples_to_host_map_array;
     int volatile * const unsafe samples_to_device_map = samples_to_device_map_array;
+#if (XUA_OUT_VOLUME_IN_MIXER && XUA_OUT_VOLUME_AFTER_MIX)
+    int volatile * const unsafe ptr_vol_ctld_samples_to_device = vol_ctld_samples_to_device_array;
+#endif
 }
 
-#if (MAX_MIX_COUNT > 0)
-int mix_mult_array[MAX_MIX_COUNT * MIX_INPUTS];
+#if (XUA_MAX_MIX_COUNT > 0)
+int mix_mult_array[XUA_MAX_MIX_COUNT * XUA_MIX_INPUTS];
 #if (FAST_MIXER == 0)
-int mix_map_array[MAX_MIX_COUNT * MIX_INPUTS];
+int mix_map_array[XUA_MAX_MIX_COUNT * XUA_MIX_INPUTS];
 #endif
 
 unsafe
@@ -76,7 +89,7 @@ unsafe
 #endif
 }
 
-#define slice(a, i) (a + i * MIX_INPUTS)
+#define slice(a, i) (a + i * XUA_MIX_INPUTS)
 
 #endif
 
@@ -91,7 +104,7 @@ xc_ptr samples_to_host_inputs_buff_ptr;
 #endif
 static int samples_from_host_streams[NUM_USB_CHAN_OUT]; /* Peak samples for audio stream from host */
 
-static int samples_mixer_outputs[MAX_MIX_COUNT];        /* Peak samples out of the mixer */
+static int samples_mixer_outputs[XUA_MAX_MIX_COUNT];        /* Peak samples out of the mixer */
 xc_ptr samples_mixer_outputs_ptr;
 
 static inline void ComputeMixerLevel(int sample, int i)
@@ -132,7 +145,7 @@ static inline int doMix(volatile int * unsafe samples, volatile int * unsafe con
     int l=0;
 
 #pragma loop unroll
-    for (int i=0; i<MIX_INPUTS; i++)
+    for (int i=0; i<XUA_MIX_INPUTS; i++)
     unsafe{
         int sample;
         int source;
@@ -162,7 +175,7 @@ static inline int doMix(volatile int * unsafe samples, volatile int * unsafe con
 #pragma unsafe arrays
 static inline void GiveSamplesToHost(chanend c, volatile int * unsafe hostMap)
 {
-#if (IN_VOLUME_IN_MIXER && IN_VOLUME_AFTER_MIX)
+#if (XUA_IN_VOLUME_IN_MIXER && XUA_IN_VOLUME_AFTER_MIX)
     int mult;
     int h;
     unsigned l;
@@ -173,7 +186,7 @@ static inline void GiveSamplesToHost(chanend c, volatile int * unsafe hostMap)
     {
         int sample;
 
-#if (MAX_MIX_COUNT > 0)
+#if (XUA_MAX_MIX_COUNT > 0)
         unsafe
         {
             sample = ptr_samples[hostMap[i]];
@@ -185,7 +198,7 @@ static inline void GiveSamplesToHost(chanend c, volatile int * unsafe hostMap)
         }
 #endif
 
-#if (IN_VOLUME_IN_MIXER && IN_VOLUME_AFTER_MIX)
+#if (XUA_IN_VOLUME_IN_MIXER && XUA_IN_VOLUME_AFTER_MIX)
 #warning IN Vols in mixer, AFTER mix & map
 
         unsafe
@@ -214,7 +227,7 @@ static inline void GetSamplesFromHost(chanend c)
         for (int i=0; i<NUM_USB_CHAN_OUT; i++)
         unsafe {
             int sample, x;
-#if (OUT_VOLUME_IN_MIXER && !OUT_VOLUME_AFTER_MIX)
+#if (XUA_OUT_VOLUME_IN_MIXER && !XUA_OUT_VOLUME_AFTER_MIX)
             int mult;
             int h;
             unsigned l;
@@ -231,7 +244,7 @@ static inline void GetSamplesFromHost(chanend c)
             }
 #endif
 
-#if (OUT_VOLUME_IN_MIXER && !OUT_VOLUME_AFTER_MIX)
+#if (XUA_OUT_VOLUME_IN_MIXER && !XUA_OUT_VOLUME_AFTER_MIX)
 #warning OUT Vols in mixer, BEFORE mix & map
             mult = multOut[i];
             {h, l} = macs(mult, sample, 0, 0);
@@ -257,15 +270,13 @@ static inline void GiveSamplesToDevice(chanend c, volatile int * unsafe deviceMa
 #pragma loop unroll
     for (int i=0; i<NUM_USB_CHAN_OUT; i++)
     {
-        int sample, x;
-#if (OUT_VOLUME_IN_MIXER && OUT_VOLUME_AFTER_MIX)
-        int mult;
-        int h;
-        unsigned l;
-#endif
-        int index;
-
-#if (MAX_MIX_COUNT > 0)
+        int sample;
+#if (XUA_OUT_VOLUME_IN_MIXER && XUA_OUT_VOLUME_AFTER_MIX)
+        unsafe {
+            sample = ptr_vol_ctld_samples_to_device[i];
+        }
+#else
+#if (XUA_MAX_MIX_COUNT > 0)
         /* If mixer turned on sort out the channel mapping */
         unsafe
         {
@@ -279,25 +290,8 @@ static inline void GiveSamplesToDevice(chanend c, volatile int * unsafe deviceMa
             sample = ptr_samples[i];
         }
 #endif
-
-#if (OUT_VOLUME_IN_MIXER && OUT_VOLUME_AFTER_MIX)
-        /* Do volume control processing */
-#warning OUT Vols in mixer, AFTER mix & map
-        unsafe
-        {
-            mult = multOut[i];
-        }
-
-        {h, l} = macs(mult, sample, 0, 0);
-        h<<=3;              // Shift used to be done in audio thread but now done here incase of 32bit support
-#if (STREAM_FORMAT_OUTPUT_RESOLUTION_32BIT_USED == 1)
-        h |= (l >>29)& 0x7; // Note: This step is not required if we assume sample depth is 24bit (rather than 32bit)
-                            // Note: We need all 32bits for Native DSD
 #endif
-        outuint(c, h);
-#else
         outuint(c, sample);
-#endif
     }
 #endif
 }
@@ -305,7 +299,7 @@ static inline void GiveSamplesToDevice(chanend c, volatile int * unsafe deviceMa
 #pragma unsafe arrays
 static inline void GetSamplesFromDevice(chanend c)
 {
-#if (IN_VOLUME_IN_MIXER && IN_VOLUME_AFTER_MIX)
+#if (XUA_IN_VOLUME_IN_MIXER && !XUA_IN_VOLUME_AFTER_MIX)
     int mult;
     int h;
     unsigned l;
@@ -332,7 +326,7 @@ static inline void GetSamplesFromDevice(chanend c)
         }
 #endif
 
-#if (IN_VOLUME_IN_MIXER && IN_VOLUME_AFTER_MIX)
+#if (XUA_IN_VOLUME_IN_MIXER && !XUA_IN_VOLUME_AFTER_MIX)
         /* Volume processing - read relevant multiplier */
         unsafe
         {
@@ -352,31 +346,148 @@ static inline void GetSamplesFromDevice(chanend c)
     }
 }
 
+#if (XUA_OUT_VOLUME_IN_MIXER && XUA_OUT_VOLUME_AFTER_MIX)
+/**
+ * do_output_volume_control()
+ *
+ * If XUA_OUT_VOLUME_IN_MIXER and XUA_OUT_VOLUME_AFTER_MIX enabled, apply volume control
+ * on a USB OUT sample after mixing and before sending it to audio.
+ * The volume control output is written to the ptr_vol_ctld_samples_to_device[] array
+ * from where it is read linearly in GiveSamplesToDevice().
+ *
+ * - Input: out_ch_index = index of the USB output channel
+ * - Output: The scaled sample is written linearly into
+ *   ptr_vol_ctld_samples_to_device[out_ch_index]
+ */
+#pragma unsafe arrays
+static inline void do_output_volume_control(int out_ch_index)
+{
+    int sample;
+    int mult;
+    int h;
+    unsigned l;
+
+    unsafe
+    {
+#if (XUA_MAX_MIX_COUNT > 0)
+        unsafe
+        {
+            /* If mixer turned on, account for channel mapping.
+            Read index to sample from the map then Read the actual sample value */
+            sample = ptr_samples[samples_to_device_map[out_ch_index]];
+        }
+#else
+        unsafe
+        {
+            /* Read the actual sample value */
+            sample = ptr_samples[out_ch_index];
+        }
+#endif
+        mult = multOut[out_ch_index];
+    }
+
+    /* Do volume control processing */
+    {h, l} = macs(mult, sample, 0, 0);
+    h<<=3;              // Shift used to be done in audio thread but now done here incase of 32bit support
+#if (STREAM_FORMAT_OUTPUT_RESOLUTION_32BIT_USED == 1)
+    h |= (l >>29)& 0x7; // Note: This step is not required if we assume sample depth is 24bit (rather than 32bit)
+                        // Note: We need all 32bits for Native DSD
+#endif
+    unsafe
+    {
+        /*
+         * Store in a different array from where it can be read out in GiveSamplesToDevice().
+         * Note: It's important to save it in a different array, and not back in ptr_samples, since the
+         * volume controlled output should not be fed back in the mixer (unless OUT_VOLUME_BEFORE_MIX is enabled)
+        */
+        ptr_vol_ctld_samples_to_device[out_ch_index] = h;
+    }
+}
+#endif
+
 
 #pragma unsafe arrays
 static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend c_audio)
 {
+    int cmd_pending_flag = 0;
+    int pending_cmd[3]; // command + a max of 2 extra values
+
     int mixer1_mix2_flag = (DEFAULT_FREQ > 96000);
-#if (MAX_MIX_COUNT > 0)
+#if (XUA_MAX_MIX_COUNT > 0)
     int mixed;
 #endif
-#if (MAX_MIX_COUNT > 0) || (IN_VOLUME_IN_MIXER) || (OUT_VOLUME_IN_MIXER) || defined (LEVEL_METER_HOST) || defined(LEVEL_METER_LEDS)
+#if (XUA_MAX_MIX_COUNT > 0) || (XUA_IN_VOLUME_IN_MIXER) || (XUA_OUT_VOLUME_IN_MIXER) || defined (LEVEL_METER_HOST) || defined(LEVEL_METER_LEDS)
     unsigned cmd;
     unsigned char ct;
 #endif
     unsigned request = 0;
+#if (XUA_MAX_MIX_COUNT > 0)
+    /**
+     * Tracks whether mixer2 was triggered during the last
+     * sample exchange. If the decoupler responds with a
+     * control command, mixer2 is not triggered.
+     */
+    int mixer2_triggered = 1;
+#endif
 
     while (1)
     {
+#if (XUA_MAX_MIX_COUNT > 0)
+        if(mixer2_triggered)
+        {
+            inuint(c_mixer2); // synchronise with mixer2
+            mixer2_triggered = 0;
+        }
+#endif
         /* Request from audio()/mixer2() */
         request = inuint(c_audio);
 
-        /* Forward on Request for data to decouple thread */
+        // Check if cmd is pending from last exchange with decoupler.
+        // If no command pending, transfer sample with audiohub to unblock it as
+        // soon as possible. This is esp important for the I2S TDM case where lots
+        // more samples need to be exchanged in lesser time than regular I2S
+        // (for example, for 96KHz tdm8. 4 i2s lines, exchange 32 samples in (1/(96000*8))seconds)
+        if(!cmd_pending_flag)
+        {
+            GiveSamplesToDevice(c_audio, samples_to_device_map);
+            GetSamplesFromDevice(c_audio);
+        }
+        else
+        {
+            // forward cmd from last exchange with decoupler to audio
+            switch(pending_cmd[0])
+            {
+                case XUA_AUDCTL_SET_SAMPLE_FREQ:
+                    outct(c_audio, pending_cmd[0]); // cmd
+                    outuint(c_audio, pending_cmd[1]); // samp freq
+                    break;
+
+                case XUA_AUD_SET_AUDIO_START:
+                    /* Inform mixer2 (or audio()) about change */
+                    outct(c_audio, pending_cmd[0]); // cmd
+                    outuint(c_audio, pending_cmd[1]); // dsd mode
+                    outuint(c_audio, pending_cmd[2]); // sample res
+                    break;
+
+                case XUA_AUD_SET_AUDIO_STOP:
+                    /* Pass on command */
+                    outct(c_audio, pending_cmd[0]); // cmd
+                    break;
+
+                default:
+                    break;
+            }
+            chkct(c_audio, XS1_CT_END);
+            outct(c_host, XS1_CT_END); // Only now ack back to the decoupler.
+            cmd_pending_flag = 0;
+            continue;
+        }
+
+        /* Forward on Request for data to decouple thread, only after sample exchange with audiohub is complete */
         outuint(c_host, request);
 
         /* Between request to decouple and response ~ 400nS latency for interrupt to fire */
-
-#if (MAX_MIX_COUNT > 0) || (IN_VOLUME_IN_MIXER) || (OUT_VOLUME_IN_MIXER) || defined (LEVEL_METER_HOST) || defined(LEVEL_METER_LEDS)
+#if (XUA_MAX_MIX_COUNT > 0) || (XUA_IN_VOLUME_IN_MIXER) || (XUA_OUT_VOLUME_IN_MIXER) || defined (LEVEL_METER_HOST) || defined(LEVEL_METER_LEDS)
         select
         {
             /* Check if EP0 intends to send us a control command */
@@ -393,7 +504,7 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
                 /* Interpret control command */
                 switch (cmd)
                 {
-#if (MAX_MIX_COUNT > 0)
+#if (XUA_MAX_MIX_COUNT > 0)
                     case SET_SAMPLES_TO_HOST_MAP:
                         {
                             int dst = inuint(c_mix_ctl);
@@ -438,14 +549,14 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
                         val = inuint(c_mix_ctl);
                         inct(c_mix_ctl);
 
-                        assert((mix < MAX_MIX_COUNT) && msg("Mix mult mix out of range"));
-                        assert((index < MIX_INPUTS) && msg("Mix mult index out of range"));
+                        assert((mix < XUA_MAX_MIX_COUNT) && msg("Mix mult mix out of range"));
+                        assert((index < XUA_MIX_INPUTS) && msg("Mix mult index out of range"));
 
-                        if((index < MIX_INPUTS) && (mix < MAX_MIX_COUNT))
+                        if((index < XUA_MIX_INPUTS) && (mix < XUA_MAX_MIX_COUNT))
                         {
                             unsafe
                             {
-                                mix_mult[(mix * MIX_INPUTS) + index] = val;
+                                mix_mult[(mix * XUA_MIX_INPUTS) + index] = val;
                             }
                         }
                         break;
@@ -457,26 +568,26 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
                             unsigned source = inuint(c_mix_ctl);    /* source */
                             inct(c_mix_ctl);
 
-                            assert((mix < MAX_MIX_COUNT) && msg("Mix map mix out of range"));
-                            assert((input < MIX_INPUTS) && msg("Mix map index out of range"));
+                            assert((mix < XUA_MAX_MIX_COUNT) && msg("Mix map mix out of range"));
+                            assert((input < XUA_MIX_INPUTS) && msg("Mix map index out of range"));
                             assert((source < SOURCE_COUNT) && msg("Mix map source out of range"));
 
-                            if((input < MIX_INPUTS) && (mix < MAX_MIX_COUNT) && (source < SOURCE_COUNT))
+                            if((input < XUA_MIX_INPUTS) && (mix < XUA_MAX_MIX_COUNT) && (source < SOURCE_COUNT))
                             {
 #if (FAST_MIXER)
                                 setPtr(input, source, mix);
 #else
                                 unsafe
                                 {
-                                    mix_map[(mix * MIX_INPUTS) + input] = source;
+                                    mix_map[(mix * XUA_MIX_INPUTS) + input] = source;
                                 }
 #endif
                             }
                         }
                         break;
-#endif /* if MAX_MIX_COUNT > 0 */
+#endif /* if XUA_MAX_MIX_COUNT > 0 */
 
-#if (IN_VOLUME_IN_MIXER)
+#if (XUA_IN_VOLUME_IN_MIXER)
                     case SET_MIX_IN_VOL:
                         index = inuint(c_mix_ctl);
                         val = inuint(c_mix_ctl);
@@ -493,7 +604,7 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
                         }
                         break;
 #endif
-#if (OUT_VOLUME_IN_MIXER)
+#if (XUA_OUT_VOLUME_IN_MIXER)
                     case SET_MIX_OUT_VOL:
                         index = inuint(c_mix_ctl);
                         val = inuint(c_mix_ctl);
@@ -535,24 +646,26 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
         {
             int sampFreq;
             unsigned command = inct(c_host);
+            cmd_pending_flag = 1; // set pending flag. Command will be forwarded to audihub in the next sample period.
+            pending_cmd[0] = command;
 
             switch(command)
             {
-                case SET_SAMPLE_FREQ:
+                case XUA_AUDCTL_SET_SAMPLE_FREQ:
                     sampFreq = inuint(c_host);
                     mixer1_mix2_flag = sampFreq > 96000;
-
-                    /* Inform mixer2 (or audio()) about freq change */
-                    outct(c_audio, command);
-                    outuint(c_audio, sampFreq);
+                    pending_cmd[1] = sampFreq;
                     break;
 
-                case SET_STREAM_FORMAT_OUT:
-                case SET_STREAM_FORMAT_IN:
-                    /* Inform mixer2 (or audio()) about format change */
-                    outct(c_audio, command);
-                    outuint(c_audio, inuint(c_host));
-                    outuint(c_audio, inuint(c_host));
+                case XUA_AUD_SET_AUDIO_START:
+                    /* Inform mixer2 (or audio()) about change */
+                    unsigned dsd_mode = inuint(c_host);
+                    unsigned sample_res = inuint(c_host);
+                    pending_cmd[1] = dsd_mode;
+                    pending_cmd[2] = sample_res;
+                    break;
+
+                case XUA_AUD_SET_AUDIO_STOP:
                     break;
 
                 default:
@@ -561,31 +674,23 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
 
 #pragma loop unroll
             /* Reset the mix values back to 0 */
-            for (int i=0; i<MAX_MIX_COUNT; i++)
+            for (int i=0; i<XUA_MAX_MIX_COUNT; i++)
             {
                 unsafe
                 {
                     ptr_samples[NUM_USB_CHAN_OUT + NUM_USB_CHAN_IN + i] = 0;
                 }
             }
-
-            /* Wait for handshake and pass on */
-            chkct(c_audio, XS1_CT_END);
-            outct(c_host, XS1_CT_END);
         }
         else
         {
-#if (MAX_MIX_COUNT > 0)
-            inuint(c_mixer2); // This is where we need mixer 2 to have finished
-#endif
-            GiveSamplesToDevice(c_audio, samples_to_device_map);
-            GetSamplesFromDevice(c_audio);
             GetSamplesFromHost(c_host);
             GiveSamplesToHost(c_host, samples_to_host_map);
 
-#if (MAX_MIX_COUNT > 0)
+#if (XUA_MAX_MIX_COUNT > 0)
             /* Trigger mixer2 */
             outuint(c_mixer2, mixer1_mix2_flag);
+            mixer2_triggered = 1;
 
             /* Do the mixing */
             unsafe
@@ -605,7 +710,7 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
 #endif
             {
 
-#if (MAX_MIX_COUNT > 2)
+#if (XUA_MAX_MIX_COUNT > 2)
                 unsafe
                 {
 #if (FAST_MIXER)
@@ -620,7 +725,7 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
 #endif
 #endif
 
-#if (MAX_MIX_COUNT > 4)
+#if (XUA_MAX_MIX_COUNT > 4)
                 unsafe
                 {
 #if (FAST_MIXER)
@@ -635,7 +740,7 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
 #endif
 #endif
 
-#if (MAX_MIX_COUNT > 6)
+#if (XUA_MAX_MIX_COUNT > 6)
                 unsafe
                 {
 #if (FAST_MIXER)
@@ -651,11 +756,41 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
 #endif
             }
 #endif
+#if (XUA_OUT_VOLUME_IN_MIXER && XUA_OUT_VOLUME_AFTER_MIX)
+        #warning OUT Vols in mixer, AFTER mix & map
+        #pragma loop unroll
+        for (int i=0; i<NUM_USB_CHAN_OUT; i++)
+        {
+            int ch_index;
+            unsafe {
+        #if (XUA_MAX_MIX_COUNT > 0)
+            // when mixer2 is present, mixer1 only does volume control for the channels that are not present with mixer2.
+            // these are the odd numbered mixer output channels.
+            // If ch_index is one of those channels, do volume control in mixer1.
+            ch_index = samples_to_device_map[i];
+            int do_vol_control = 0;
+            if(ch_index >= (NUM_USB_CHAN_OUT + NUM_USB_CHAN_IN)) /* if its one of the mixer output channels */
+            {
+                if(!((ch_index - (NUM_USB_CHAN_OUT + NUM_USB_CHAN_IN)) & 0x1)) /* if its on even numbered mixer channel */
+                {
+                    do_vol_control = 1;
+                }
+            }
+        #else // there's no second mixer. mixer1 does all the volume control
+            int do_vol_control = 1;
+        #endif
+            if(do_vol_control)
+            {
+                do_output_volume_control(i);
+            }
+            }
+        }
+    #endif
         }
     }
 }
 
-#if (MAX_MIX_COUNT > 0)
+#if (XUA_MAX_MIX_COUNT > 0)
 #pragma unsafe arrays
 static void mixer2(chanend c_mixer1)
 {
@@ -667,7 +802,7 @@ static void mixer2(chanend c_mixer1)
         mixer2_mix2_flag = inuint(c_mixer1);
 
         /* Do the mixing */
-#if (MAX_MIX_COUNT > 1)
+#if (XUA_MAX_MIX_COUNT > 1)
         unsafe
         {
 #if (FAST_MIXER)
@@ -687,7 +822,7 @@ static void mixer2(chanend c_mixer1)
         if (!mixer2_mix2_flag)
 #endif
         {
-#if (MAX_MIX_COUNT > 3)
+#if (XUA_MAX_MIX_COUNT > 3)
             unsafe
             {
 #if (FAST_MIXER)
@@ -702,7 +837,7 @@ static void mixer2(chanend c_mixer1)
 #endif
 #endif
 
-#if (MAX_MIX_COUNT > 5)
+#if (XUA_MAX_MIX_COUNT > 5)
             unsafe
             {
 #if (FAST_MIXER)
@@ -718,7 +853,7 @@ static void mixer2(chanend c_mixer1)
 #endif
 #endif
 
-#if (MAX_MIX_COUNT > 7)
+#if (XUA_MAX_MIX_COUNT > 7)
             unsafe
             {
 #if (FAST_MIXER)
@@ -733,6 +868,39 @@ static void mixer2(chanend c_mixer1)
 #endif
 #endif
         }
+
+    // mixer2 is responsible for output volume control, unless the sample is not available with mixer2,
+    // in which case it leaves it to mixer1 to do.
+    // mixer2 has ptr_samples[0..(NUM_USB_CHAN_OUT+NUM_USB_CHAN_IN)] as well as index 1,3,5 and 7 (odd indexes!) of the mixed outputs
+
+#if (XUA_OUT_VOLUME_IN_MIXER && XUA_OUT_VOLUME_AFTER_MIX)
+        #warning OUT Vols in mixer, AFTER mix & map
+        #pragma loop unroll
+        for (int i=0; i<NUM_USB_CHAN_OUT; i++)
+        {
+            int ch_index;
+            unsafe {
+            ch_index = samples_to_device_map[i];
+            }
+            int do_vol_control = 0;
+            if(ch_index < (NUM_USB_CHAN_OUT + NUM_USB_CHAN_IN)) /* if ch_index is one of the usb out or in channels*/
+            {
+                do_vol_control = 1;
+            }
+            else
+            {
+                if((ch_index - (NUM_USB_CHAN_OUT + NUM_USB_CHAN_IN)) & 0x1) /* if ch_index is an odd numbered mixer output channel*/
+                {
+                    do_vol_control = 1;
+                }
+            }
+            if(do_vol_control)
+            {
+                do_output_volume_control(i);
+            }
+        }
+#endif
+
         outuint(c_mixer1, 0);
     }
 }
@@ -740,7 +908,7 @@ static void mixer2(chanend c_mixer1)
 
 void mixer(chanend c_mix_in, chanend c_mix_out, chanend c_mix_ctl)
 {
-#if (MAX_MIX_COUNT > 0)
+#if (XUA_MAX_MIX_COUNT > 0)
     chan c;
 #endif
 
@@ -752,7 +920,7 @@ void mixer(chanend c_mix_in, chanend c_mix_out, chanend c_mix_ctl)
     samples_mixer_outputs_ptr = array_to_xc_ptr((samples_mixer_outputs, unsigned[]));
 #endif
 
-    for (int i=0;i<NUM_USB_CHAN_OUT + NUM_USB_CHAN_IN + MAX_MIX_COUNT;i++)
+    for (int i=0;i<NUM_USB_CHAN_OUT + NUM_USB_CHAN_IN + XUA_MAX_MIX_COUNT;i++)
     unsafe {
         ptr_samples[i] = 0;
     }
@@ -762,14 +930,14 @@ void mixer(chanend c_mix_in, chanend c_mix_out, chanend c_mix_ctl)
         samples_to_device_map_array[i] = i;
     }
 
-#if (OUT_VOLUME_IN_MIXER)
+#if (XUA_OUT_VOLUME_IN_MIXER)
     for (int i=0; i<NUM_USB_CHAN_OUT; i++)
     unsafe{
         multOut[i] = MAX_VOLUME_MULT;
     }
 #endif
 
-#if (IN_VOLUME_IN_MIXER)
+#if (XUA_IN_VOLUME_IN_MIXER)
     for (int i=0; i<NUM_USB_CHAN_IN; i++)
     unsafe{
         multIn[i] = MAX_VOLUME_MULT;
@@ -781,20 +949,20 @@ void mixer(chanend c_mix_in, chanend c_mix_out, chanend c_mix_ctl)
         samples_to_host_map[i] = XUA_MIXER_OFFSET_IN + i;
     }
 
-#if (MAX_MIX_COUNT> 0)
-    for (int i=0;i<MAX_MIX_COUNT;i++)
-        for (int j=0;j<MIX_INPUTS;j++)
+#if (XUA_MAX_MIX_COUNT> 0)
+    for (int i=0;i<XUA_MAX_MIX_COUNT;i++)
+        for (int j=0;j<XUA_MIX_INPUTS;j++)
         unsafe{
 #if (FAST_MIXER == 0)
-            mix_map[i * MIX_INPUTS + j] = (j < 16 ? j : j + 2);
+            mix_map[i * XUA_MIX_INPUTS + j] = (j < 16 ? j : j + 2);
 #endif
-            mix_mult[i * MIX_INPUTS + j] = (i==j ? db_to_mult(0, XUA_MIXER_DB_FRAC_BITS, XUA_MIXER_MULT_FRAC_BITS) : 0);
+            mix_mult[i * XUA_MIX_INPUTS + j] = (i==j ? db_to_mult(0, XUA_MIXER_DB_FRAC_BITS, XUA_MIXER_MULT_FRAC_BITS) : 0);
         }
 #endif
 
     par
     {
-#if (MAX_MIX_COUNT > 0)
+#if (XUA_MAX_MIX_COUNT > 0)
         mixer1(c_mix_in, c_mix_ctl, c, c_mix_out);
         mixer2(c);
 #else

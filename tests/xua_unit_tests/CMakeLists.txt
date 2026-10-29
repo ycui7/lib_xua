@@ -16,7 +16,6 @@ set(APP_COMPILER_FLAGS -fcomment-asm
                        -report
                        -g
                        -fxscope
-                       -DUSB_TILE=tile[0]
                        -DUNITY_SUPPORT_64
                        -DUNITY_INCLUDE_DOUBLE
                        -DXUD_CORE_CLOCK=600
@@ -38,6 +37,20 @@ endforeach()
 # HID report descriptor header is shared between tests, so select the correct part
 list(APPEND APP_COMPILER_FLAGS_test_hid -DUNIT_TEST_SIMPLE_REPORT)
 list(APPEND APP_COMPILER_FLAGS_test_hid_multi_report -DUNIT_TEST_MULTI_REPORT)
+
+# Mixer config test uses the legacy (un-prefixed) mixer defines to check they are still honoured.
+# XUA_MAX_MIX_COUNT > XUA_MIX_INPUTS to check default weight setup when there are more mixes than inputs
+set(APP_COMPILER_FLAGS_test_mixer_config ${APP_COMPILER_FLAGS}
+                                         -DMIXER=1
+                                         -DMAX_MIX_COUNT=4
+                                         -DMIX_INPUTS=2
+                                         -DMIN_MIXER_VOLUME=0x8200
+                                         -DXUA_MIN_MIXER_VOLUME=0x8300
+                                         -DMAX_MIXER_VOLUME=0x0100
+                                         -DVOLUME_RES_MIXER=0x0200
+                                         -DOUT_VOLUME_AFTER_MIX=0
+                                         -DIN_VOLUME_IN_MIXER=1
+                                         -DIN_VOLUME_AFTER_MIX=0)
 
 # Enable auto gen of test runners
 set(LIB_UNITY_AUTO_TEST_RUNNER ON)

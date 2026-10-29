@@ -1,60 +1,143 @@
-// Copyright 2011-2024 XMOS LIMITED.
+// Copyright 2011-2026 XMOS LIMITED.
 // This Software is subject to the terms of the XMOS Public Licence: Version 1.
 /*
  * @brief       Defines relating to device configuration and customisation of lib_xua
  */
-#ifndef _XUA_CONF_DEFAULT_H_
-#define _XUA_CONF_DEFAULT_H_
+#ifndef XUA_CONF_DEFAULT_H_
+#define XUA_CONF_DEFAULT_H_
+
+#ifndef __ASSEMBLER__
+/* Needed for offsetof() */
+#include <stddef.h>
+#endif
 
 #ifdef __xua_conf_h_exists__
     #include "xua_conf.h"
+#endif
+
+#ifdef __xua_conf_dfu_h_exists__
+    #include "xua_conf_dfu.h"
 #endif
 
 /*
  * Tile arrangement defines
  */
 
-/**
- * @brief Location (tile) of audio I/O. Default: 0
- */
-#ifndef AUDIO_IO_TILE
-#define AUDIO_IO_TILE   (0)
+/* Tidy up legacy defines */
+#ifdef AUDIO_IO_TILE
+#define XUA_AUDIO_IO_TILE_NUM AUDIO_IO_TILE
+#endif
+
+#ifdef XUD_TILE
+#define XUA_XUD_TILE_NUM XUD_TILE
+#endif
+
+#ifdef MIDI_TILE
+#define XUA_MIDI_TILE_NUM MIDI_TILE
+#endif
+
+#ifdef SPDIF_TX_TILE
+#define XUA_SPDIF_TX_TILE_NUM SPDIF_TX_TILE
+#endif
+
+#ifdef PDM_TILE
+#define XUA_MIC_PDM_TILE_NUM PDM_TILE
+#endif
+
+#ifdef PLL_REF_TILE
+#define XUA_PLL_REF_TILE_NUM PLL_REF_TILE
 #endif
 
 /**
- * @brief Location (tile) of audio I/O. Default: 0
+ * @brief Location (tile) of audio I/O.
+ *
+ * The tile number to run the AudioHub() task.
+ * The location if automatically detected from ports in the XN file.
  */
-#ifndef XUD_TILE
-#define XUD_TILE        (0)
+#ifndef XUA_AUDIO_IO_TILE_NUM
+    #ifdef PORT_I2S_DAC0_TILE_NUM
+        #define XUA_AUDIO_IO_TILE_NUM   (PORT_I2S_DAC0_TILE_NUM)
+    #elif defined(PORT_I2S_ADC0_TILE_NUM)
+        #define XUA_AUDIO_IO_TILE_NUM   (PORT_I2S_ADC0_TILE_NUM)
+    #elif defined(PORT_I2S_BCLK_TILE_NUM)
+        #define XUA_AUDIO_IO_TILE_NUM   (PORT_I2S_BCLK_TILE_NUM)
+    #else
+        /* If cannot automatically detect, default to tile 0 */
+        #define XUA_AUDIO_IO_TILE_NUM   (0)
+    #endif
 #endif
 
 /**
- * @brief Location (tile) of MIDI I/O. Default: AUDIO_IO_TILE
+ * @brief Location (tile) of audio I/O.
+ *
+ * The tile number to run lib_xud tasks on.
  */
-#ifndef MIDI_TILE
-#define MIDI_TILE       AUDIO_IO_TILE
+#ifndef XUA_XUD_TILE_NUM
+#define XUA_XUD_TILE_NUM        (0)
 #endif
 
 /**
- * @brief Location (tile) of SPDIF Tx. Default: AUDIO_IO_TILE
+ * @brief Location (tile) of MIDI I/O.
+ *
+ * The tile number to run MIDI tasks on.
+ * The location if automatically detected from ports in the XN file.
  */
-#ifndef SPDIF_TX_TILE
-#define SPDIF_TX_TILE   AUDIO_IO_TILE
+#ifndef XUA_MIDI_TILE_NUM
+    #ifdef PORT_MIDI_IN_TILE
+        #define XUA_MIDI_TILE_NUM (PORT_MIDI_IN_TILE)
+    #elif defined(PORT_MIDI_OUT_TILE)
+        #define XUA_MIDI_TILE_NUM (PORT_MIDI_OUT_TILE)
+    #else
+        /* If cannot automatically detect, default to XUA_AUDIO_IO_TILE_NUM */
+        #define XUA_MIDI_TILE_NUM   XUA_AUDIO_IO_TILE_NUM
+    #endif
 #endif
 
 /**
- * @brief Location (tile) of PDM Rx. Default: AUDIO_IO_TILE
+ * @brief Location (tile) of SPDIF Tx.
+ *
+ * The tile number to run the S/PDIF tx task on.
+ * The location if automatically detected from ports in the XN file.
  */
-#ifndef PDM_TILE
-#define PDM_TILE        AUDIO_IO_TILE
+#ifndef XUA_SPDIF_TX_TILE_NUM
+    #ifdef PORT_SPDIF_TX_TILE
+        #define XUA_SPDIF_TX_TILE_NUM (PORT_SPDIF_TX_TILE)
+    #else
+        /* If cannot automatically detect, default to XUA_AUDIO_IO_TILE_NUM */
+        #define XUA_SPDIF_TX_TILE_NUM     XUA_AUDIO_IO_TILE_NUM
+    #endif
 #endif
 
 /**
- * @brief Location (tile) of reference signal to CS2100. Default: AUDIO_IO_TILE
+ * @brief Location (tile) of PDM Rx.
+ *
+ * The tile number to run the PDM Mics tasks on.
+ * The location if automatically detected from ports in the XN file.
  */
-#ifndef PLL_REF_TILE
-#define PLL_REF_TILE    AUDIO_IO_TILE
+#ifndef XUA_MIC_PDM_TILE_NUM
+    #ifdef PORT_PDM_CLK_TILE_NUM
+        #define XUA_MIC_PDM_TILE_NUM     PORT_PDM_CLK_TILE_NUM
+    #else
+        /* If cannot automatically detect, default to XUA_AUDIO_IO_TILE_NUM */
+        #define XUA_MIC_PDM_TILE_NUM     XUA_AUDIO_IO_TILE_NUM
+    #endif
 #endif
+
+/**
+ * @brief Location (tile) of reference signal to CS2100.
+ *
+ * The tile number to run the PLL reference clock task on.
+ * The location if automatically detected from ports in the XN file.
+ */
+#ifndef XUA_PLL_REF_TILE_NUM
+    #ifdef PORT_PLL_REF_TILE_NUM
+        #define XUA_PLL_REF_TILE_NUM   PORT_PLL_REF_TILE_NUM
+    #else
+        /* If cannot automatically detect, default to XUA_AUDIO_IO_TILE_NUM */
+        #define XUA_PLL_REF_TILE_NUM   XUA_AUDIO_IO_TILE_NUM
+    #endif
+#endif
+
 
 /*
  * Audio channel based defines
@@ -77,12 +160,47 @@
 #endif
 
 /**
- * @brief Number of PDM microphones in the design.
+ * @brief Number of PDM microphone outputs in the design.
  *
  * Default: 0
  */
 #ifndef XUA_NUM_PDM_MICS
 #define XUA_NUM_PDM_MICS         (0)
+#endif
+
+/**
+ * @brief Number of PDM microphone inputs. This is the width of the pdm data port,
+ * and should be atleast XUA_NUM_PDM_MICS
+ *
+ * Default: XUA_NUM_PDM_MICS
+ */
+#ifndef XUA_NUM_PDM_MICS_IN
+#define XUA_NUM_PDM_MICS_IN         (XUA_NUM_PDM_MICS)
+#endif
+
+
+/** Merge the PDM receive task into the decimation task using an ISR.
+ *  Note: this works well with lower PDM mic counts but 8 and above
+ *  may require separation into dedicated tasks.
+ *
+ *  DEFAULT: 1, Enable PDM RX ISR mode
+ *
+ **/
+#ifndef XUA_PDM_MIC_USE_PDM_ISR
+#define XUA_PDM_MIC_USE_PDM_ISR		1
+#endif
+
+/**
+ * @brief Indicates whether two microphones share a single data line (DDR mode).
+ *
+ * When set to 1, the system uses Double Data Rate (DDR) signaling to read two
+ * microphones from a single data line. When set to 0, each microphone is read
+ * on a separate data line.
+ *
+ * Default: 1
+ */
+#ifndef XUA_PDM_MIC_USE_DDR
+#define XUA_PDM_MIC_USE_DDR         1
 #endif
 
 /**
@@ -101,7 +219,7 @@
 #endif
 
 /**
- * @brief Number of I2S channesl to DAC/CODEC. Must be a multiple of 2.
+ * @brief Number of I2S channels to DAC/CODEC. Must be a multiple of 2.
  *
  * Default: NONE (Must be defined by app)
  */
@@ -304,47 +422,75 @@
  */
 
 /**
- * @brief USB Audio Class Version
+ * @brief Legacy USB Audio Class version
  *
  * Default: 2 (Audio Class version 2.0)
+ *
+ * Note: XUA_USB_AUDIO_CLASS_HS and XUA_USB_AUDIO_CLASS_FS are derived from this value.
+ * Setting these defines directly will override this value.
  */
 #ifndef AUDIO_CLASS
 #define AUDIO_CLASS              (2)
 #endif
 
-/**
- * @brief Enable/disable fall back to Audio Class 1.0 in USB Full-speed.
+/** @brief Audio class version to run at HS
  *
- * Default: Disabled
+ * Default: AUDIO_CLASS
+ *
+ * Note: Set to 0 for no operation at HS.
  */
-#ifndef AUDIO_CLASS_FALLBACK
-#define AUDIO_CLASS_FALLBACK     (0)
+#ifndef XUA_AUDIO_CLASS_HS
+
+#if (AUDIO_CLASS == 1)
+    #define XUA_AUDIO_CLASS_HS   (0)
+#else
+    #define XUA_AUDIO_CLASS_HS   AUDIO_CLASS
+#endif
 #endif
 
-/**
- * @brief Whether or not to run UAC2 in full-speed. When disabled device can either operate in
- *        UAC1 mode in full-speed (if AUDIO_CLASS_FALLBACK enabled) or return "null" descriptors.
+/** @brief Audio class version to run at FS
  *
- * Default: 1 (Enabled) when AUDIO_CLASS_FALLBACK disabled.
+ * Default: AUDIO_CLASS
+ *
+ * Note: Set to 0 for no operation at FS.
  */
-#if ((AUDIO_CLASS == 2) || __DOXYGEN__)
-    /* Whether to run in Audio Class 2.0 mode in USB Full-speed */
-    #if !defined(FULL_SPEED_AUDIO_2) && (AUDIO_CLASS_FALLBACK == 0)
-        #define FULL_SPEED_AUDIO_2    1     /* Default to falling back to UAC2 */
+#ifndef XUA_AUDIO_CLASS_FS
+#define XUA_AUDIO_CLASS_FS       AUDIO_CLASS
+#endif
+
+/* @brief Desired USB Bus Speed to run the device at.
+ *
+ * Default: High-speed for UAC2.0, Full-speed for UAC1.0
+ *
+ * Note: this is a desired speed - the host may not support high-speed (HS) and the device will
+ * then run in full-speed (FS) mode.
+ */
+#ifndef XUA_USB_BUS_SPEED
+  #if AUDIO_CLASS == 1
+    /* XUD_SPEED_FS = 1 */
+    #define XUA_USB_BUS_SPEED    1
+  #else
+    /* XUD_SPEED_HS = 2 */
+    #define XUA_USB_BUS_SPEED    2
+  #endif
+#else
+    #if (XUA_USB_BUS_SPEED != 1) && (XUA_USB_BUS_SPEED != 2)
+        #error XUA_USB_BUS_SPEED must be either XUD_SPEED_HS or XUD_SPEED_FS
+    #endif
+    #if (XUA_USB_BUS_SPEED == XUD_SPEED_HS) && (AUDIO_CLASS == 1)
+        #error XUA_USB_BUS_SPEED set to HS but AUDIO_CLASS set to 1, this is an invalid configuration!
     #endif
 #endif
 
-#if defined(FULL_SPEED_AUDIO_2) && (FULL_SPEED_AUDIO_2 == 0)
-#undef FULL_SPEED_AUDIO_2
-#endif
-
-/* Some checks on full-speed functionality */
-#if defined(FULL_SPEED_AUDIO_2) && (AUDIO_CLASS_FALLBACK)
-#error FULL_SPEED_AUDIO_2 and AUDIO_CLASS_FALLBACK enabled!
-#endif
-
-#if (AUDIO_CLASS == 1) && defined(FULL_SPEED_AUDIO_2)
-#error AUDIO_CLASS set to 1 and FULL_SPEED_AUDIO_2 enabled!
+/** @brief Input channel terminal type override to line in
+ *
+ * Set to 1 to have USB input present as line-in to the host
+ *
+ * Default: disabled (input channels appear as mics)
+ *
+ */
+#ifndef XUA_DEC_INPUT_TYPE_LINE_IN
+    #define XUA_DEC_INPUT_TYPE_LINE_IN (0)
 #endif
 
 /*
@@ -352,7 +498,7 @@
  */
 
 /**
- * @brief Disable USB functionalty just leaving AudioHub
+ * @brief Disable USB functionality just leaving AudioHub
  *
  * Default: Enabled
  */
@@ -366,15 +512,8 @@
  *
  * Default: 0 (i.e. channels [0:XUA_NUM_PDM_MICS-1])
  * */
-#ifndef PDM_MIC_INDEX
-#define PDM_MIC_INDEX           (0)
-#endif
-
-/**
- * @brief Size of a frame of microphone data samples. Default: 1
- */
-#ifndef XUA_MIC_FRAME_SIZE
-#define XUA_MIC_FRAME_SIZE      (1)
+#ifndef XUA_PDM_MIC_INDEX
+#define XUA_PDM_MIC_INDEX           (0)
 #endif
 
 /**
@@ -693,11 +832,11 @@
 #endif
 
 /**
- * @brief USB Product ID (PID) for Audio Class 1.0 mode. Only required if AUDIO_CLASS == 1 or AUDIO_CLASS_FALLBACK is enabled.
+ * @brief USB Product ID (PID) for Audio Class 1.0 mode. Only required if XUA_AUDIO_CLASS_FS == 1.
  *
  * Default: 0x0003
  */
-#if (AUDIO_CLASS == 1) || (AUDIO_CLASS_FALLBACK) || defined(__DOXYGEN__)
+#if (XUA_AUDIO_CLASS_FS == 1) || defined(__DOXYGEN__)
 #ifndef PID_AUDIO_1
 #define PID_AUDIO_1              (0x0003)
 #endif
@@ -723,7 +862,7 @@
  * @brief Device firmware version number in Binary Coded Decimal format: 0xJJMN where JJ: major, M: minor, N: sub-minor version number.
  */
 #ifndef BCD_DEVICE_M
-#define BCD_DEVICE_M             (0)
+#define BCD_DEVICE_M             (5)
 #endif
 
 /**
@@ -1178,51 +1317,91 @@
  */
 #if (XUA_POWERMODE == XUA_POWERMODE_SELF)
     /* Default to taking no power from the bus in self-powered mode */
-    #ifndef _XUA_BMAX_POWER
-        #define _XUA_BMAX_POWER     (0)
+    #ifndef XUA_BMAX_POWER
+        #define XUA_BMAX_POWER     (0)
     #endif
 #else
     /* Default to taking 500mA from the bus in bus-powered mode */
-    #ifndef _XUA_BMAX_POWER
-        #define _XUA_BMAX_POWER      (250)
+    #ifndef XUA_BMAX_POWER
+        #define XUA_BMAX_POWER      (250)
     #endif
 #endif
 
 /* Mixer defines */
+
+#if !defined(XUA_MIXER_EN) && defined(MIXER)
+#define XUA_MIXER_EN               MIXER
+#endif
+
+#if !defined(XUA_MAX_MIX_COUNT) && defined(MAX_MIX_COUNT)
+#define XUA_MAX_MIX_COUNT          MAX_MIX_COUNT
+#endif
+
+#if !defined(XUA_MIX_INPUTS) && defined(MIX_INPUTS)
+#define XUA_MIX_INPUTS             MIX_INPUTS
+#endif
+
+#if !defined(XUA_MIN_MIXER_VOLUME) && defined(MIN_MIXER_VOLUME)
+#define XUA_MIN_MIXER_VOLUME       MIN_MIXER_VOLUME
+#endif
+
+#if !defined(XUA_MAX_MIXER_VOLUME) && defined(MAX_MIXER_VOLUME)
+#define XUA_MAX_MIXER_VOLUME       MAX_MIXER_VOLUME
+#endif
+
+#if !defined(XUA_VOLUME_RES_MIXER) && defined(VOLUME_RES_MIXER)
+#define XUA_VOLUME_RES_MIXER       VOLUME_RES_MIXER
+#endif
+
+#if !defined(XUA_OUT_VOLUME_IN_MIXER) && defined(OUT_VOLUME_IN_MIXER)
+#define XUA_OUT_VOLUME_IN_MIXER    OUT_VOLUME_IN_MIXER
+#endif
+
+#if !defined(XUA_OUT_VOLUME_AFTER_MIX) && defined(OUT_VOLUME_AFTER_MIX)
+#define XUA_OUT_VOLUME_AFTER_MIX   OUT_VOLUME_AFTER_MIX
+#endif
+
+#if !defined(XUA_IN_VOLUME_IN_MIXER) && defined(IN_VOLUME_IN_MIXER)
+#define XUA_IN_VOLUME_IN_MIXER     IN_VOLUME_IN_MIXER
+#endif
+
+#if !defined(XUA_IN_VOLUME_AFTER_MIX) && defined(IN_VOLUME_AFTER_MIX)
+#define XUA_IN_VOLUME_AFTER_MIX    IN_VOLUME_AFTER_MIX
+#endif
 
 /**
  * @brief Enable "mixer" core
  *
  * Default: 0 (Disabled)
  */
-#ifndef MIXER
-#define MIXER              (0)
+#ifndef XUA_MIXER_EN
+#define XUA_MIXER_EN              (0)
 #endif
 
 /**
  * @brief Number of seperate mixes to perform
  *
- * Default: 8 if MIXER enabled, else 0
+ * Default: 8 if XUA_MIXER_EN enabled, else 0
  */
-#if (MIXER)
-    #ifndef MAX_MIX_COUNT
-        #define MAX_MIX_COUNT          (8)
+#if (XUA_MIXER_EN)
+    #ifndef XUA_MAX_MIX_COUNT
+        #define XUA_MAX_MIX_COUNT          (8)
     #endif
 #else
-    #ifndef MAX_MIX_COUNT
-        #define MAX_MIX_COUNT          (0)
+    #ifndef XUA_MAX_MIX_COUNT
+        #define XUA_MAX_MIX_COUNT          (0)
     #endif
 #endif
 
 /**
  * @brief Number of channels input into the mixer.
  *
- * Note, total number of mixer nodes is MIX_INPUTS * MAX_MIX_COUNT
+ * Note, total number of mixer nodes is XUA_MIX_INPUTS * XUA_MAX_MIX_COUNT
  *
  * Default: 18
  */
-#ifndef MIX_INPUTS
-    #define MIX_INPUTS                 (18)
+#ifndef XUA_MIX_INPUTS
+    #define XUA_MIX_INPUTS                 (18)
 #endif
 
 /* Volume processing defines */
@@ -1262,8 +1441,8 @@
  *
  * Default: 0x8100 (-127db)
  */
-#ifndef MIN_MIXER_VOLUME
-#define MIN_MIXER_VOLUME             (0x8100)
+#ifndef XUA_MIN_MIXER_VOLUME
+#define XUA_MIN_MIXER_VOLUME             (0x8100)
 #endif
 
 /**
@@ -1271,8 +1450,8 @@
  *
  * Default: 0x0000 (0db)
  */
-#ifndef MAX_MIXER_VOLUME
-#define MAX_MIXER_VOLUME            (0x0000)
+#ifndef XUA_MAX_MIXER_VOLUME
+#define XUA_MAX_MIXER_VOLUME            (0x0000)
 #endif
 
 /**
@@ -1280,32 +1459,32 @@
  *
 * Default: 0x100 (1db)
 */
-#ifndef VOLUME_RES_MIXER
-#define VOLUME_RES_MIXER            (0x100)
+#ifndef XUA_VOLUME_RES_MIXER
+#define XUA_VOLUME_RES_MIXER            (0x100)
 #endif
 
 /* Handle out volume control in the mixer - enabled by default */
-#ifndef OUT_VOLUME_IN_MIXER
-#if MIXER
-    #define OUT_VOLUME_IN_MIXER     (1)
+#ifndef XUA_OUT_VOLUME_IN_MIXER
+#if XUA_MIXER_EN
+    #define XUA_OUT_VOLUME_IN_MIXER     (1)
 #else
-    #define OUT_VOLUME_IN_MIXER     (0)
+    #define XUA_OUT_VOLUME_IN_MIXER     (0)
 #endif
 #endif
 
-/* Apply out volume controls after the mix. Only relevant when OUT_VOLUME_IN_MIXER enabled. Enabled by default */
-#ifndef OUT_VOLUME_AFTER_MIX
-#define OUT_VOLUME_AFTER_MIX        (1)
+/* Apply out volume controls after the mix. Only relevant when XUA_OUT_VOLUME_IN_MIXER enabled. Enabled by default */
+#ifndef XUA_OUT_VOLUME_AFTER_MIX
+#define XUA_OUT_VOLUME_AFTER_MIX        (1)
 #endif
 
 /* Handle in volume control in the mixer - disabled by default */
-#ifndef IN_VOLUME_IN_MIXER
-#define IN_VOLUME_IN_MIXER          (0)
+#ifndef XUA_IN_VOLUME_IN_MIXER
+#define XUA_IN_VOLUME_IN_MIXER          (0)
 #endif
 
-/* Apply in volume controls after the mix. Only relevant when IN_VOLUMNE_IN MIXER enabled. Enabled by default */
-#ifndef IN_VOLUME_AFTER_MIX
-#define IN_VOLUME_AFTER_MIX         (1)
+/* Apply in volume controls after the mix. Only relevant when XUA_IN_VOLUME_IN_MIXER enabled. Enabled by default */
+#ifndef XUA_IN_VOLUME_AFTER_MIX
+#define XUA_IN_VOLUME_AFTER_MIX         (1)
 #endif
 
 /* Always enable explicit feedback EP, even when input stream is present */
@@ -1332,6 +1511,27 @@
     #endif
 #endif
 
+/* Allows calling of user function before buffer starts. */
+#ifndef XUA_USER_FUNCTION_CALL_PRE_BUFFER
+#define XUA_USER_FUNCTION_CALL_PRE_BUFFER
+#endif
+
+/* Provides a method to insert user IN endpoints. These must be initialised from ``xua_user_endpoint_init.h``. */
+#ifndef XUA_USER_IN_ENDPOINTS
+#define XUA_USER_IN_ENDPOINTS
+#endif
+
+/* Provides a method to insert user OUT endpoints. These must be initialised from ``xua_user_endpoint_init.h``. */
+#ifndef XUA_USER_OUT_ENDPOINTS
+#define XUA_USER_OUT_ENDPOINTS
+#endif
+
+/* Allows insertion of user USB interfaces into descriptors. */
+#ifndef XUA_USER_INTERFACES
+#define XUA_USER_INTERFACES
+#endif
+
+
 
 /*********************************************************/
 /*** Internal defines below here. NOT FOR MODIFICATION ***/
@@ -1342,11 +1542,11 @@
 enum USBEndpointNumber_In
 {
     ENDPOINT_NUMBER_IN_CONTROL,     /* Endpoint 0 */
-#if (NUM_USB_CHAN_OUT > 0) && ((NUM_USB_CHAN_IN == 0) || defined(UAC_FORCE_FEEDBACK_EP))
-    ENDPOINT_NUMBER_IN_FEEDBACK,
-#endif
 #if (NUM_USB_CHAN_IN != 0)
     ENDPOINT_NUMBER_IN_AUDIO,
+#endif
+#if (NUM_USB_CHAN_OUT > 0) && ((NUM_USB_CHAN_IN == 0) || defined(UAC_FORCE_FEEDBACK_EP))
+    ENDPOINT_NUMBER_IN_FEEDBACK,
 #endif
 #if (XUA_SPDIF_RX_EN) || (XUA_ADAT_RX_EN)
     ENDPOINT_NUMBER_IN_INTERRUPT,   /* Audio interrupt/status EP */
@@ -1357,15 +1557,7 @@ enum USBEndpointNumber_In
 #if XUA_OR_STATIC_HID_ENABLED
     ENDPOINT_NUMBER_IN_HID,
 #endif
-#ifdef IAP
-#ifdef IAP_INT_EP
-    ENDPOINT_NUMBER_IN_IAP_INT,
-#endif
-    ENDPOINT_NUMBER_IN_IAP,
-#ifdef IAP_EA_NATIVE_TRANS
-    ENDPOINT_NUMBER_IN_IAP_EA_NATIVE_TRANS,
-#endif
-#endif
+    XUA_USER_IN_ENDPOINTS           /* Optional additional endpoints (eg. CDC)*/
     XUA_ENDPOINT_COUNT_IN           /* End marker */
 };
 
@@ -1378,15 +1570,10 @@ enum USBEndpointNumber_Out
 #ifdef MIDI
     ENDPOINT_NUMBER_OUT_MIDI,
 #endif
-#ifdef IAP
-    ENDPOINT_NUMBER_OUT_IAP,
-#ifdef IAP_EA_NATIVE_TRANS
-    ENDPOINT_NUMBER_OUT_IAP_EA_NATIVE_TRANS,
-#endif
-#endif
 #if XUA_OR_STATIC_HID_ENABLED && HID_OUT_REQUIRED
     ENDPOINT_NUMBER_OUT_HID,
 #endif
+    XUA_USER_OUT_ENDPOINTS
     XUA_ENDPOINT_COUNT_OUT          /* End marker */
 };
 
@@ -1469,7 +1656,6 @@ enum USBEndpointNumber_Out
 #define DFU_PRODUCT_STR_INDEX       offsetof(StringDescTable_t, productStr_Audio2)/sizeof(char *)
 #else
 #define DFU_PRODUCT_STR_INDEX       offsetof(StringDescTable_t, productStr_Audio1)/sizeof(char *)
-#endif
 #endif
 
 /* USB test mode support enabled by default (Required for compliance testing) */
@@ -1651,12 +1837,185 @@ enum USBEndpointNumber_Out
 #endif
 
 /**
- * @brief Device interface GUID.
+ * @brief Device interface GUID for the DFU interface.
  *
  * This is provided as part of the device registry property in the MSOS 2.0 descriptor.
  * Default: "{89C14132-D389-4FF7-944E-2E33379BB59D}" User can override by defining their own in xua_conf.h
+ *
+ * \warning This GUID must remain unchanged for DFU to work correctly with the XMOS supplied DFU driver.
  */
-#ifndef WINUSB_DEVICE_INTERFACE_GUID
-#define WINUSB_DEVICE_INTERFACE_GUID               "{89C14132-D389-4FF7-944E-2E33379BB59D}"
+#ifndef XUA_WINUSB_DEVICE_INTERFACE_GUID_DFU
+#define XUA_WINUSB_DEVICE_INTERFACE_GUID_DFU        "{89C14132-D389-4FF7-944E-2E33379BB59D}"
 #endif
 
+/**
+ * @brief Device interface GUID for the MSOS 2.0 Descriptor.
+ *
+ * This is provided as part of the device registry property in the MSOS 2.0 descriptor.
+ * Default: "{563F19C9-B0CD-4A15-9047-59D31EADC345}" User can override by defining their own in xua_conf.h
+ */
+#ifndef XUA_WINUSB_DEVICE_INTERFACE_GUID_CONTROL
+#define XUA_WINUSB_DEVICE_INTERFACE_GUID_CONTROL    "{563F19C9-B0CD-4A15-9047-59D31EADC345}"
+#endif
+
+/**
+ * @brief Request code for the D2H vendor request that the host will use to request the MSOS descriptor.
+ *
+ * The user shouldn't use this bRequest number in their custom vendor requests to the device, as it is now reserved for descriptor handling.
+ * However, the user can override this define to use a different bRequest number if required.
+ */
+#ifndef XUA_REQUEST_GET_MSOS_DESCRIPTOR
+#define XUA_REQUEST_GET_MSOS_DESCRIPTOR             (0x20)
+#endif
+
+/**
+ * @brief Enable power saving feature in XUA_Buffer_Decouple()
+ *
+ * If set to 1 then a channel is instantiated between the XUA_Buffer_Ep() and XUA_Buffer_Decouple()
+ * tasks (which together form the buffer between XUD and Audio) that limits shared memory polling
+ * in XUA_Buffer_Ep() to occur only when a change has been made by XUA_Buffer_Decouple().
+ * This significantly reduces core power at the cost of two channel ends on the USB_TILE.
+ */
+#ifdef __DOXYGEN__
+#define XUA_CHAN_BUFF_CTRL
+#endif
+#if defined(XUA_CHAN_BUFF_CTRL) && (XUA_CHAN_BUFF_CTRL == 0)
+#undef XUA_CHAN_BUFF_CTRL
+#endif
+
+/**
+ * @brief Enable power saving when device is enumerated but audio in not currently streaming
+ *
+ * If set to 1 then transitions to ALT interface 0 (streaming stopped) will cause AudioHub to cease
+ * looping and no-longer driver the I2S/TDM lines. In addition, the callback AudioHwShutdown() is called
+ * which allows the user to run any specific code (eg. CODEC power-down and/or disable master clock)
+ * to further reduce system power in this state. AudioHwInit() and AudioHwConfig() will always be called
+ * again prior to USB audio streaming. The transition to the low power state will only occur when *both*
+ * input *and* output interfaces are not streaming. As soon as either input or output streaming starts
+ * then audiohub is restarted.
+ *
+ * If set to zero or undefined (default behaviour) then AudioHub will always continue looping even when
+ * audio streaming stops. This behaviour may be preferable in applications where frequent initialisation
+ * of the mixed signal hardware is undesirable, where other parts of the system rely on I2S clocks being
+ * conitinuously available or in MI (musical instrument) applications where functions such as mixer need
+ * to continuously operate regardless of USB streaming state.
+ */
+#ifndef XUA_LOW_POWER_NON_STREAMING
+#define XUA_LOW_POWER_NON_STREAMING                      0
+#endif
+
+/**
+ * @brief Derive USB TILE MCLK for async feedback from reference clock.
+ *
+ * When enabled, the clocks are counted from the reference clock. Note there MUST be a rational relationship
+ * between the 100MHz reference clock and the master clock applied to the audio tile for this to work.
+ * You must also define XUA_FB_REF_MUL_48, XUA_FB_REF_DIV_48, XUA_FB_REF_MUL_44 and XUA_FB_REF_DIV_44 if
+ * this feature is enabled. eg. XUA_FB_REF_MUL_48 = 768, XUA_FB_REF_DIV_48 = 3125 for 24.576MHz.
+ *
+ * Note in some cases the MCLK may not be a rational fraction of the reference clock
+ * (eg. when using APP/Secondary PLL at 44100 kHz). This scheme cannot work in those cases!!
+ *
+ * This feature also cannot work if an external clock source is enabled (eg. SPDIF or ADAT rx)!!
+ */
+#ifndef XUA_FB_USE_REF_CLOCK
+#define XUA_FB_USE_REF_CLOCK    (0)
+#endif
+
+/**
+ * @brief Enable Vendor specific control interface
+ *
+ * When enabled, device enumerates with an extra Vendor specific control interface with no associated endpoints
+ * Default: Disabled by default
+ */
+#ifndef XUA_USB_CONTROL_DESCS
+#define XUA_USB_CONTROL_DESCS    0
+#endif
+
+/**
+ * @brief Enable Vendor specific control interface to enumerate as WinUSB on Windows
+ *
+ * Allow the Vendor specific control interface, if enabled (XUA_USB_CONTROL_DESCS defined to 1), to enumerate as WinUSB on Windows.
+ * Default: Enabled by default. If disabled, manual driver installation for the control interface would
+ * be required on Windows
+ */
+#ifndef ENUMERATE_CONTROL_INTF_AS_WINUSB
+#define ENUMERATE_CONTROL_INTF_AS_WINUSB    1
+#endif
+
+/**
+ * @brief Macro specifying if an mclk input and a second mclk input are required
+ */
+#define _NEED_MCLK_FOR_I2S \
+  (((I2S_CHANS_DAC != 0) || (I2S_CHANS_ADC != 0)) && (!CODEC_MASTER))
+
+#define _NEED_MCLK_FOR_DIG_RX \
+  (XUA_USE_SW_PLL && (XUA_ADAT_RX_EN || XUA_SPDIF_RX_EN))
+
+#define _NEED_MCLK_FOR_ADAT_TX (XUA_ADAT_TX_EN)
+#define _NEED_MCLK_FOR_SPDIF_TX (XUA_SPDIF_TX_EN)
+#define _NEED_MCLK_FOR_USB (XUA_USB_EN)
+
+/* Need mclk */
+#define MCLK_REQUIRED ( \
+    (_NEED_MCLK_FOR_I2S) || \
+    (_NEED_MCLK_FOR_DIG_RX) || \
+    (_NEED_MCLK_FOR_ADAT_TX) || \
+    (_NEED_MCLK_FOR_SPDIF_TX && (XUA_SPDIF_TX_TILE_NUM == XUA_AUDIO_IO_TILE_NUM)) || \
+    (_NEED_MCLK_FOR_USB && (XUA_AUDIO_IO_TILE_NUM == XUA_XUD_TILE_NUM)) \
+)
+
+/* Need second mclk -
+ - USB is enabled and present on a different tile than audio, a second mclk will be needed for USB feedback calculation
+ - SPDIF TX is enabled and present on a different tile than audio */
+#define SECOND_MCLK_REQUIRED ( \
+    (_NEED_MCLK_FOR_USB && (XUA_XUD_TILE_NUM != XUA_AUDIO_IO_TILE_NUM)) || \
+    (_NEED_MCLK_FOR_SPDIF_TX && (XUA_SPDIF_TX_TILE_NUM != XUA_AUDIO_IO_TILE_NUM)) \
+)
+
+/*
+ * Indicates whether an adjustable MCLK is required.
+ *   1 = adjustable MCLK required (USB sync mode or SPDIF/ADAT RX enabled)
+ *   0 = fixed MCLK required (USB async/adapt without digital RX)
+ */
+#define ADJUSTABLE_MCLK_REQUIRED  ((XUA_SYNCMODE == XUA_SYNCMODE_SYNC) || XUA_SPDIF_RX_EN || XUA_ADAT_RX_EN)
+
+/**
+ * @brief UAC2.0 Audio channel location bit-mask for a given channel count.
+ *
+ * This macro is used when building UAC2.0 descriptors to populate the
+ * channel cluster spatial-location bitmap (``bmChannelConfig`` in
+ * UAC2.0 ``Audio_Out_ClassStreamInterface`` and ``Audio_Out_InputTerminal`` descriptors).
+ *
+ * @param ch Number of channels in the stream.
+ *
+ * @return Bitwise OR of channel-position flags corresponding to the
+ * selected channel layout.
+ *
+ * @note Applications may override this macro in ``xua_conf.h`` to provide a
+ * custom speaker/channel layout.
+ */
+#ifndef XUA_OUTPUT_AUDIO20_CHANNEL_MASK
+#define XUA_OUTPUT_AUDIO20_CHANNEL_MASK(ch) AUDIO20_DEFAULT_CHANNEL_MASK(ch)
+#endif
+
+
+/**
+ * @brief UAC1.0 Audio channel location bit-mask for a given channel count.
+ *
+ * This macro is used when building UAC1.0 descriptors to populate the
+ * channel cluster spatial-location bitmap (``wChannelConfig`` in
+ * UAC1.0 CS_Interface Input Terminal 1 descriptor).
+ *
+ * @param ch Number of channels in the stream.
+ *
+ * @return Bitwise OR of channel-position flags corresponding to the
+ * selected channel layout.
+ *
+ * @note Applications may override this macro in ``xua_conf.h`` to provide a
+ * custom speaker/channel layout.
+ */
+#ifndef XUA_OUTPUT_AUDIO10_CHANNEL_MASK
+#define XUA_OUTPUT_AUDIO10_CHANNEL_MASK(ch) AUDIO10_DEFAULT_CHANNEL_MASK(ch)
+#endif
+
+#endif /* _XUA_CONF_DEFAULT_H_ */

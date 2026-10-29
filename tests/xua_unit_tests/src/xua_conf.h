@@ -1,4 +1,4 @@
-// Copyright 2017-2024 XMOS LIMITED.
+// Copyright 2017-2026 XMOS LIMITED.
 // This Software is subject to the terms of the XMOS Public Licence: Version 1.
 
 #define NUM_USB_CHAN_OUT 2
@@ -13,11 +13,13 @@
 #define EXCLUDE_USB_AUDIO_MAIN
 #define XUA_NUM_PDM_MICS 0
 
-#define PDM_TILE 2
-#define XUD_TILE 1
-#define AUDIO_IO_TILE 1
+#define XUA_XUD_TILE_NUM      1
+#define XUA_AUDIO_IO_TILE_NUM 1
 
-#define MIXER 0
+/* Mixer tests enable the mixer via the legacy MIXER define */
+#if !defined(XUA_MIXER_EN) && !defined(MIXER)
+#define XUA_MIXER_EN 0
+#endif
 
 #define SPDIF_TX_INDEX 0
 #define VENDOR_STR "XMOS"
@@ -34,4 +36,8 @@
 /* TODO */
 #define XUA_DFU XUA_DFU_EN
 
-#define FB_USE_REF_CLOCK 1
+#define XUA_FB_USE_REF_CLOCK 1
+#define XUA_FB_REF_MUL_48 768
+#define XUA_FB_REF_DIV_48 3125
+#define XUA_FB_REF_MUL_44 768
+#define XUA_FB_REF_DIV_44 3375

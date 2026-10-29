@@ -1,4 +1,4 @@
-// Copyright 2011-2024 XMOS LIMITED.
+// Copyright 2011-2026 XMOS LIMITED.
 // This Software is subject to the terms of the XMOS Public Licence: Version 1.
 #ifndef _XUA_MIDI_H_
 #define _XUA_MIDI_H_
@@ -31,10 +31,6 @@ void usb_midi(
     NULLABLE_RESOURCE(clock, clk_midi),
     NULLABLE_RESOURCE(chanend, c_midi),
     unsigned cable_number
-#ifdef IAP
-    , chanend ?c_iap, chanend ?c_i2c, // iOS stuff
-    port ?p_scl, port ?p_sda
-#endif
 );
 
 #define MAX_USB_MIDI_PACKET_SIZE 1024

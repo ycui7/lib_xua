@@ -1,4 +1,4 @@
-// Copyright 2022-2024 XMOS LIMITED.
+// Copyright 2022-2026 XMOS LIMITED.
 // This Software is subject to the terms of the XMOS Public Licence: Version 1.
 
 #define USB_MIXER_SUCCESS 0
@@ -7,7 +7,7 @@
 #define USB_MIXERS 1
 #define USB_MIXER_INPUTS 18
 #define USB_MIXER_OUTPUTS 8
-#define USB_MAX_CHANNEL_MAP_SIZE 40
+#define USB_MAX_CHANNEL_MAP_SIZE (32 + 32 + USB_MIXER_OUTPUTS + 1) /* to support i32o32 configuration */
 #define USB_MIXER_MAX_NAME_LEN 64
 
 enum usb_chan_type {

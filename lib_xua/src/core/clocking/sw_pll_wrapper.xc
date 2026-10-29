@@ -1,4 +1,4 @@
-// Copyright 2024 XMOS LIMITED.
+// Copyright 2024-2026 XMOS LIMITED.
 // This Software is subject to the terms of the XMOS Public Licence: Version 1.
 #include <xs1.h>
 #include <assert.h>
@@ -120,6 +120,9 @@ void sw_pll_task(chanend c_sw_pll){
        the first control value has been received. This avoids issues with
        channel lockup if two tasks (eg. init and SDM) try to write at the same time. */
 
+    unsigned command = inuint(c_sw_pll);
+    (void)command;
+    inct(c_sw_pll);
     while(1)
     {
         unsigned selected_mclk_rate = inuint(c_sw_pll);
@@ -156,6 +159,19 @@ void sw_pll_task(chanend c_sw_pll){
                     {
                         f_error = 0;
                         running = 0;
+                    }
+                    else if(rx_word == SET_DCO_TO_NOMINAL)
+                    {
+                        unsigned mclk_rate = inuint(c_sw_pll);
+                        inct(c_sw_pll);
+                        if(mclk_rate == MCLK_48)
+                        {
+                            dco_setting = SW_PLL_SDM_CTRL_MID_24;
+                        }
+                        else
+                        {
+                            dco_setting = SW_PLL_SDM_CTRL_MID_22;
+                        }
                     }
                     else
                     {
@@ -194,6 +210,14 @@ void sw_pll_task(chanend c_sw_pll){
 void restart_sigma_delta(chanend c_sw_pll, unsigned selected_mclk_rate)
 {
     outuint(c_sw_pll, DISABLE_SDM); /* Resets SDM */
+    outct(c_sw_pll, XS1_CT_END);
+    outuint(c_sw_pll, selected_mclk_rate);
+    outct(c_sw_pll, XS1_CT_END);
+}
+
+void sw_pll_set_pll_to_nominal(chanend c_sw_pll, unsigned selected_mclk_rate)
+{
+    outuint(c_sw_pll, SET_DCO_TO_NOMINAL);
     outct(c_sw_pll, XS1_CT_END);
     outuint(c_sw_pll, selected_mclk_rate);
     outct(c_sw_pll, XS1_CT_END);

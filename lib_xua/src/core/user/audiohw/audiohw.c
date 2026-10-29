@@ -1,7 +1,8 @@
-// Copyright 2023-2024 XMOS LIMITED.
+// Copyright 2023-2026 XMOS LIMITED.
 // This Software is subject to the terms of the XMOS Public Licence: Version 1.
 
-/* Default implementations of AudioHwInit(), AudioHwConfig(), AudioHwConfig_Mute() and AudioHwConfig_UnMute() */
+/* Default implementations of AudioHwInit(), AudioHwShutdown(), AudioHwConfig(),
+ * AudioHwConfig_Mute() and AudioHwConfig_UnMute() */
 
 void AudioHwInit() __attribute__ ((weak));
 void AudioHwInit()
@@ -9,9 +10,21 @@ void AudioHwInit()
     return;
 }
 
+void AudioHwShutdown() __attribute__ ((weak));
+void AudioHwShutdown()
+{
+    return;
+}
+
 void AudioHwConfig(unsigned samFreq, unsigned mClk, unsigned dsdMode, unsigned sampRes_DAC, unsigned sampRes_ADC) __attribute__ ((weak));
 void AudioHwConfig(unsigned samFreq, unsigned mClk, unsigned dsdMode, unsigned sampRes_DAC, unsigned sampRes_ADC)
 {
+    (void)samFreq;
+    (void)mClk;
+    (void)dsdMode;
+    (void)sampRes_DAC;
+    (void)sampRes_ADC;
+
     return;
 }
 

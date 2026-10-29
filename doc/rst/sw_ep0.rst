@@ -29,10 +29,10 @@ Since these are required for all devices in order to function a
 ``USB_StandardRequests()`` function is provided (see ``xud_device.xc``) which implements all of these requests.
 This includes the following items:
 
-    - Requests for standard descriptors (Device descriptor, configuration descriptor etc) and string descriptors
-    - USB GET/SET INTERFACE requests
-    - USB GET/SET_CONFIGURATION requests
-    - USB SET_ADDRESS requests
+- Requests for standard descriptors (Device descriptor, configuration descriptor etc) and string descriptors
+- USB GET/SET INTERFACE requests
+- USB GET/SET_CONFIGURATION requests
+- USB SET_ADDRESS requests
 
 For more information and full documentation, including full worked examples of simple devices,
 refer to `lib_xud <www.xmos.com/file/lib_xud>`_.
@@ -62,7 +62,7 @@ device. In this case the setup packet is parsed, the relevant action taken, the
 Class requests
 --------------
 
-Before making the call to ``USB_StandardRequests()`` the setup packet is parsed for Class requests. These are handled in functions such as ``AudioClassRequests_1()``, ``AudioClassRequests_2``, ``DFUDeviceRequests()`` etc depending on the type of request.
+Before making the call to ``USB_StandardRequests()`` the setup packet is parsed for Class requests. These are handled in functions such as ``AudioClassRequests_1()``, ``AudioClassRequests_2``, ``dfu_usb_class_int_requests()`` etc depending on the type of request.
 
 Any device specific requests are handled - in this case Audio Class, MIDI class, DFU requests etc.
 

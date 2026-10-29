@@ -1,4 +1,4 @@
-// Copyright 2017-2024 XMOS LIMITED.
+// Copyright 2017-2026 XMOS LIMITED.
 // This Software is subject to the terms of the XMOS Public Licence: Version 1.
 
 #ifndef _XUA_CONF_H_
@@ -16,7 +16,7 @@
 #define EXCLUDE_USB_AUDIO_MAIN
 
 #define MIDI            1
-#define MIDI_TILE       1
+#define XUA_MIDI_TILE_NUM       1
 #define VENDOR_STR      "XMOS"
 #define VENDOR_ID       0x20B1
 #define PRODUCT_STR_A2  "XUA Example"

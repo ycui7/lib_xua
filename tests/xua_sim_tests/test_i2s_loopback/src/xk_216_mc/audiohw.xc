@@ -1,4 +1,4 @@
-// Copyright 2016-2024 XMOS LIMITED.
+// Copyright 2016-2026 XMOS LIMITED.
 // This Software is subject to the terms of the XMOS Public Licence: Version 1.
 #ifdef HARDWARE
 
@@ -96,8 +96,8 @@ void PllMult(unsigned output, unsigned ref, client interface i2c_master_if i2c)
 #endif
 
 #if !(defined(XUA_SPDIF_RX_EN) || defined(XUA_ADAT_RX_EN)) && defined(USE_FRACTIONAL_N)
-on tile[AUDIO_IO_TILE] : out port p_pll_clk = PORT_PLL_REF;
-on tile[AUDIO_IO_TILE] : clock clk_pll_sync = XS1_CLKBLK_5;
+on tile[XUA_AUDIO_IO_TILE_NUM] : out port p_pll_clk = PORT_PLL_REF;
+on tile[XUA_AUDIO_IO_TILE_NUM] : clock clk_pll_sync = XS1_CLKBLK_5;
 #endif
 
 void wait_us(int microseconds)
@@ -144,11 +144,6 @@ void AudioHwInit(chanend ?c_codec)
         i2c_master_single_port(i2c, 1, p_i2c, 10, 0, 1, 0);
         PllInit(i2c[0]);
     }
-#endif
-
-#ifdef IAP
-    /* Enable VBUS output */
-    set_gpio(P_GPIO_VBUS_EN, 1);
 #endif
 }
 

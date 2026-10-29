@@ -1,7 +1,9 @@
-// Copyright 2017-2024 XMOS LIMITED.
+// Copyright 2017-2026 XMOS LIMITED.
 // This Software is subject to the terms of the XMOS Public Licence: Version 1.
 #ifndef _XUA_CONF_FULL_H_
 #define _XUA_CONF_FULL_H_
+
+#include "xua_ep0_audio_channel_layout.h"
 
 #ifdef __xua_conf_h_exists__
     #include "xua_conf.h"

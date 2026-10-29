@@ -1,4 +1,4 @@
-// Copyright 2016-2024 XMOS LIMITED.
+// Copyright 2016-2026 XMOS LIMITED.
 // This Software is subject to the terms of the XMOS Public Licence: Version 1.
 #include <platform.h>
 #include <stdlib.h>
@@ -12,7 +12,7 @@
 
 /* Port declarations. Note, the defines come from the xn file */
 #if I2S_WIRES_DAC > 0
-on tile[AUDIO_IO_TILE] : buffered out port:32 p_i2s_dac[I2S_WIRES_DAC] =
+on tile[XUA_AUDIO_IO_TILE_NUM] : buffered out port:32 p_i2s_dac[I2S_WIRES_DAC] =
                 {PORT_I2S_DAC0,
 #endif
 #if I2S_WIRES_DAC > 1
@@ -41,7 +41,7 @@ on tile[AUDIO_IO_TILE] : buffered out port:32 p_i2s_dac[I2S_WIRES_DAC] =
 #endif
 
 #if I2S_WIRES_ADC > 0
-on tile[AUDIO_IO_TILE] : buffered in port:32 p_i2s_adc[I2S_WIRES_ADC] =
+on tile[XUA_AUDIO_IO_TILE_NUM] : buffered in port:32 p_i2s_adc[I2S_WIRES_ADC] =
                 {PORT_I2S_ADC0,
 #endif
 #if I2S_WIRES_ADC > 1
@@ -81,8 +81,8 @@ in port p_mclk_in                   = PORT_MCLK_IN;
 #endif
 
 /* Clock-block declarations */
-clock clk_audio_bclk                = on tile[AUDIO_IO_TILE]: XS1_CLKBLK_1;   /* Bit clock */
-clock clk_audio_mclk                = on tile[AUDIO_IO_TILE]: XS1_CLKBLK_2;   /* Master clock */
+clock clk_audio_bclk                = on tile[XUA_AUDIO_IO_TILE_NUM]: XS1_CLKBLK_1;   /* Bit clock */
+clock clk_audio_mclk                = on tile[XUA_AUDIO_IO_TILE_NUM]: XS1_CLKBLK_2;   /* Master clock */
 
 #ifdef SIMULATION
 #define INITIAL_SKIP_FRAMES 10
@@ -125,12 +125,12 @@ void generator(chanend c_checker, chanend c_out)
       if (!fail) {
         debug_printf("PASS\n");
       }
-      outct(c_out, SET_SAMPLE_FREQ);
-      //inuint(c_out); //This causes the DFUhandler to be called with exceptiopn in slave mode so skip this - we are out of here anyhow
+      outct(c_out, XUA_AUDCTL_SET_SAMPLE_FREQ);
+      //inuint(c_out); //This causes the dfu_usb_server to be called with exception in slave mode so skip this - we are out of here anyhow
 
     /* Give some time for AudioHub() to react to the command to stop accessing ports otherwise exit()
      * will trap in the port destructors
-     * Note, this is a bit of a cludge since ideally program would completely shutdown, however, AudioHub
+     * Note, this is a bit of a kludge since ideally program would completely shutdown, however, AudioHub
      * has a while(1)
      */
       timer t;
@@ -199,19 +199,56 @@ void checker(chanend c_checker, int disable)
 
 #ifdef SIMULATION
 
-out port p_mclk_gen       = on tile[AUDIO_IO_TILE] :  XS1_PORT_1A;
-clock clk_audio_mclk_gen  = on tile[AUDIO_IO_TILE] : XS1_CLKBLK_3;
+out port p_mclk_gen       = on tile[XUA_AUDIO_IO_TILE_NUM] :  XS1_PORT_1A;
+clock clk_audio_mclk_gen  = on tile[XUA_AUDIO_IO_TILE_NUM] : XS1_CLKBLK_3;
+in port p_for_mclk_count  = on tile[XUA_XUD_TILE_NUM] : XS1_PORT_16A;
 void master_mode_clk_setup(void);
 
 #if CODEC_MASTER
-out port  p_bclk_gen      = on tile[AUDIO_IO_TILE] : XS1_PORT_1B;
-clock clk_audio_bclk_gen  = on tile[AUDIO_IO_TILE] : XS1_CLKBLK_4;
-out port  p_lrclk_gen     = on tile[AUDIO_IO_TILE] : XS1_PORT_1C;
-clock clk_audio_lrclk_gen = on tile[AUDIO_IO_TILE] : XS1_CLKBLK_5;
+out port  p_bclk_gen      = on tile[XUA_AUDIO_IO_TILE_NUM] : XS1_PORT_1B;
+clock clk_audio_bclk_gen  = on tile[XUA_AUDIO_IO_TILE_NUM] : XS1_CLKBLK_4;
+out port  p_lrclk_gen     = on tile[XUA_AUDIO_IO_TILE_NUM] : XS1_PORT_1C;
+clock clk_audio_lrclk_gen = on tile[XUA_AUDIO_IO_TILE_NUM] : XS1_CLKBLK_5;
 void slave_mode_clk_setup(const unsigned samFreq, const unsigned chans_per_frame);
 #endif
 
-#endif
+
+void mclk_checker(void)
+{
+  if(XUA_AUDIO_IO_TILE_NUM == XUA_XUD_TILE_NUM)
+  {
+    int x;
+    asm("ldw %0, dp[clk_audio_mclk]":"=r"(x));
+    asm("setclk res[%0], %1"::"r"(p_for_mclk_count), "r"(x));
+
+    unsigned c0, c1;
+    // startup value of port timer
+    delay_microseconds(5); // Wait for I2S to start the clock
+    p_for_mclk_count :> void @ c0;
+    delay_microseconds(10); // Wait for port timer to increment a bit more. Should be just over 25 ticks per microsecond, so 250 + a few instruction times
+
+    // Input will fail if not clocked so have timeout
+    timer t;
+    int timeout;
+    t :> timeout;
+    timeout += XS1_TIMER_MHZ; // 1 us in the future
+
+    select{
+      case t when timerafter(timeout) :> int _: 
+        debug_printf("TIMEOUT in mclk_checker - MCLK port could not input due to no clock\n");
+        break;
+
+      case p_for_mclk_count :> void @ c1:
+        if( ((c1 - c0) > 270) || ((c1 - c0) < 230) ){
+          debug_printf("mclk_checker error - MCLK port could input but timer not incrementing at correct rate. Expecting ~250 for 25MHz but got %d\n", (c1 - c0));
+        }
+        break;
+    }
+    // All good, print nothing
+  }
+}
+
+#endif // SIM
 
 #if (XUA_PCM_FORMAT == XUA_PCM_FORMAT_TDM)
 const int i2s_tdm_mode = 8;
@@ -226,7 +263,7 @@ int main(void)
 
     par
     {
-        on tile[AUDIO_IO_TILE]:
+        on tile[XUA_AUDIO_IO_TILE_NUM]:
         {
             par
             {
@@ -242,6 +279,9 @@ int main(void)
 #endif
             }
         }
+#ifdef SIMULATION
+        on tile[XUA_XUD_TILE_NUM]: mclk_checker();
+#endif
     }
 
     return 0;

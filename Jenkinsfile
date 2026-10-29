@@ -1,136 +1,103 @@
 // This file relates to internal XMOS infrastructure and should be ignored by external users
 
-@Library('xmos_jenkins_shared_library@v0.34.0') _
-
-def clone_test_deps() {
-  dir("${WORKSPACE}") {
-    sh "git clone git@github.com:xmos/test_support"
-    sh "git -C test_support checkout 961532d89a98b9df9ccbce5abd0d07d176ceda40"
-
-    sh "git clone git@github0.xmos.com:xmos-int/xtagctl"
-    sh "git -C xtagctl checkout v2.0.0"
-
-    sh "git clone git@github.com:xmos/hardware_test_tools"
-    sh "git -C hardware_test_tools checkout 2f9919c956f0083cdcecb765b47129d846948ed4"
-  }
-}
-
-def archiveLib(String repoName) {
-    sh "git -C ${repoName} clean -xdf"
-    sh "zip ${repoName}_sw.zip -r ${repoName}"
-    archiveArtifacts artifacts: "${repoName}_sw.zip", allowEmptyArchive: false
-}
-
-def checkout_shallow()
-{
-  checkout scm: [
-    $class: 'GitSCM',
-    branches: scm.branches,
-    userRemoteConfigs: scm.userRemoteConfigs,
-    extensions: [[$class: 'CloneOption', depth: 1, shallow: true, noTags: false]]
-  ]
-}
+@Library('xmos_jenkins_shared_library@v0.49.0') _
 
 getApproval()
 
 pipeline {
+
   agent none
-  environment {
-    REPO = 'lib_xua'
-  }
-  options {
-    buildDiscarder(xmosDiscardBuildSettings())
-    skipDefaultCheckout()
-    timestamps()
-  }
+
   parameters {
     string(
       name: 'TOOLS_VERSION',
-      defaultValue: '15.3.0',
+      defaultValue: '15.3.1',
       description: 'The XTC tools version'
     )
     string(
       name: 'XMOSDOC_VERSION',
-      defaultValue: 'v6.1.3',
+      defaultValue: 'v8.0.1',
       description: 'The xmosdoc version')
 
     string(
       name: 'INFR_APPS_VERSION',
-      defaultValue: 'v2.0.1',
+      defaultValue: 'v3.4.0',
       description: 'The infr_apps version'
     )
+    choice(
+        name: 'TEST_LEVEL', choices: ['smoke', 'nightly'],
+        description: 'The level of test coverage to run')
+  }
+  options {
+    skipDefaultCheckout()
+    timestamps()
+    buildDiscarder(xmosDiscardBuildSettings(onlyArtifacts = false))
   }
 
   stages {
-    stage('Build and test') {
+    stage('🏗️ Build and test') {
       agent {
         label 'documentation && x86_64 && linux'
       }
       stages {
-        stage('Checkout and lib checks') {
+        stage('Checkout') {
           steps {
+
             println "Stage running on ${env.NODE_NAME}"
-            dir("${REPO}") {
-              checkout_shallow()
-              dir("examples") {
-                withTools(params.TOOLS_VERSION) {
-                  sh 'cmake -G "Unix Makefiles" -B build -DDEPS_CLONE_SHALLOW=TRUE'
-                }
-              }
+
+            script {
+              def (server, user, repo) = extractFromScmUrl()
+              env.REPO_NAME = repo
             }
-            warnError("lib checks") {
-              runLibraryChecks("${WORKSPACE}/${REPO}", "${params.INFR_APPS_VERSION}")
+            dir(REPO_NAME){
+              checkoutScmShallow()
             }
           }
-        }  // stage('Checkout and lib checks')
+        }  // stage('Checkout')
+
+        stage('Examples build') {
+          steps {
+            dir("${REPO_NAME}/examples") {
+              xcoreBuild()
+            }
+          }
+        }
+        stage('Repo checks') {
+          steps {
+            warnError("Repo checks failed")
+            {
+              runRepoChecks("${WORKSPACE}/${REPO_NAME}")
+            }
+          }
+        }
+        stage('Doc build') {
+          steps {
+            dir(REPO_NAME) {
+              buildDocs()
+            }
+          }
+        }
         stage("Archive Lib") {
           steps {
-            archiveLib(REPO)
+            archiveSandbox(REPO_NAME)
           }
         } //stage("Archive Lib")
 
-        stage('Build examples') {
+        stage('Build HW tests') {
           steps {
-            println "Stage running on ${env.NODE_NAME}"
-
-            dir("${REPO}") {
-              dir("examples") {
-                withTools(params.TOOLS_VERSION) {
-                  sh 'cmake -G "Unix Makefiles" -B build -DDEPS_CLONE_SHALLOW=TRUE'
-                  sh 'xmake -C build -j 16'
-                }
-              }
-            }
-            // Archive all the generated .xe files
-            archiveArtifacts artifacts: "${REPO}/examples/**/*.xe"
-          }
-        }  // Build examples
-
-        stage('Build Documentation') {
-          steps {
-            dir("${REPO}") {
-              warnError("Docs") {
-                buildDocs()
-                dir("examples/AN00246_xua_example") {
-                  buildDocs()
-                }
-                dir("examples/AN00247_xua_example_spdif_tx") {
-                  buildDocs()
-                }
-                dir("examples/AN00248_xua_example_pdm_mics") {
-                  buildDocs()
-                }
-              }
-            } // dir("${REPO}")
+            dir("${REPO_NAME}/tests/xua_hw_tests") {
+              xcoreBuild()
+              stash includes: '**/*.xe', name: 'hw_test_bin', useDefaultExcludes: false
+            } // dir(REPO_NAME)
           } // steps
-        } // stage('Build Documentation')
-      }
+        } // stage('Build tests')
+      } // stages
       post {
         cleanup {
           xcoreCleanSandbox()
         }
       }
-    }  // Build and test
+    }  // stage 'Build and test'
 
     stage('Build host apps') {
       parallel {
@@ -140,17 +107,6 @@ pipeline {
           }
           steps {
             println "Stage running on ${env.NODE_NAME}"
-
-            dir("${REPO}") {
-              checkout_shallow()
-              dir("${REPO}/host/xmosdfu") {
-                sh 'cmake -B build'
-                sh 'make -C build'
-                sh 'mkdir -p Linux64'
-                sh 'mv build/xmosdfu Linux64/xmosdfu'
-                archiveArtifacts artifacts: "Linux64/xmosdfu", fingerprint: true
-              }
-            }
           }
           post {
             cleanup {
@@ -166,15 +122,8 @@ pipeline {
           steps {
             println "Stage running on ${env.NODE_NAME}"
 
-            dir("${REPO}") {
-              checkout_shallow()
-              dir("${REPO}/host/xmosdfu") {
-                sh 'cmake -B build'
-                sh 'make -C build'
-                sh 'mkdir -p OSX/x86'
-                sh 'mv build/xmosdfu OSX/x86/xmosdfu'
-                archiveArtifacts artifacts: "OSX/x86/xmosdfu", fingerprint: true
-              }
+            dir(REPO_NAME) {
+              checkoutScmShallow()
               dir("host_usb_mixer_control") {
                 sh 'make -f Makefile.OSX'
                 sh 'mkdir -p OSX/x86'
@@ -197,19 +146,30 @@ pipeline {
           steps {
             println "Stage running on ${env.NODE_NAME}"
 
-            dir("${REPO}") {
-              checkout_shallow()
-              dir("${REPO}/host/xmosdfu") {
+            dir(REPO_NAME) {
+              checkoutScmShallow()
+              // Build examples to pull required dependencies into the sandbox for the host app build.
+              // This is required to build the xmosdfu dependency which is used in the Mac HW tests.
+              dir("examples") {
+                xcoreBuild(archiveBins: false)
+              }
+              dir("tests/xua_hw_tests/test_control/host")
+              {
                 sh 'cmake -B build'
                 sh 'make -C build'
-                sh 'mkdir -p OSX/arm64'
-                sh 'mv build/xmosdfu OSX/arm64/xmosdfu'
-                archiveArtifacts artifacts: "OSX/arm64/xmosdfu", fingerprint: true
-               dir("OSX/arm64") {
-                  stash includes: 'xmosdfu', name: 'macos_xmosdfu'
-                }
-              }
+                stash includes: 'build/host_control_test', name: 'host_control_test_bin_mac_arm', useDefaultExcludes: false
+              } // dir("${REPO_NAME}/tests/xua_hw_tests/test_control/host")
             }
+            dir("lib_dfu/host/xmosdfu") {
+              sh 'cmake -B build'
+              sh 'make -C build'
+              sh 'mkdir -p OSX/arm64'
+              sh 'mv bin/xmosdfu OSX/arm64/xmosdfu'
+              archiveArtifacts artifacts: "OSX/arm64/xmosdfu", fingerprint: true
+              dir("OSX/arm64") {
+                stash includes: 'xmosdfu', name: 'macos_xmosdfu'
+              }
+            } // dir("lib_dfu/host/xmosdfu")
           }
           post {
             cleanup {
@@ -218,31 +178,6 @@ pipeline {
           }
         }  // Build Mac arm host app
 
-        stage('Build Pi host app') {
-          agent {
-            label 'pi'
-          }
-          steps {
-            println "Stage running on ${env.NODE_NAME}"
-
-            dir("${REPO}") {
-              checkout_shallow()
-              dir("${REPO}/host/xmosdfu") {
-                sh 'cmake -B build'
-                sh 'make -C build'
-                sh 'mkdir -p RPi'
-                sh 'mv build/xmosdfu RPi/xmosdfu'
-                archiveArtifacts artifacts: "RPi/xmosdfu", fingerprint: true
-              }
-            }
-          }
-          post {
-            cleanup {
-              xcoreCleanSandbox()
-            }
-          }
-        }  // Build Pi host app
-
         stage('Build Windows host app') {
           agent {
             label 'x86_64&&windows&&usb_audio'
@@ -250,24 +185,22 @@ pipeline {
           steps {
             println "Stage running on ${env.NODE_NAME}"
 
-            dir("${REPO}") {
-              checkout_shallow()
-              dir("${REPO}/host/xmosdfu") {
-                withVS("vcvars32.bat") {
+            dir(REPO_NAME) {
+              checkoutScmShallow()
+              withVS() {
+                dir("host_usb_mixer_control") {
+                  bat 'msbuild host_usb_mixer_control.vcxproj /property:Configuration=Release /property:Platform=x64'
+                  bat 'mkdir Win\\x64'
+                  bat 'mv bin/Release/x64/host_usb_mixer_control.exe Win/x64/xmos_mixer.exe'
+                  archiveArtifacts artifacts: "Win/x64/xmos_mixer.exe", fingerprint: true
+                }
+                dir("tests/xua_hw_tests/test_control/host")
+                {
                   bat "cmake -B build -G Ninja"
                   bat "ninja -C build"
-                  bat 'mkdir win32 && cp build/xmosdfu.exe win32/'
-                  archiveArtifacts artifacts: "win32/xmosdfu.exe", fingerprint: true
+                  stash includes: 'build/host_control_test.exe', name: 'host_control_test_bin_windows', useDefaultExcludes: false
                 }
-              }
-              dir("host_usb_mixer_control") {
-                withVS() {
-                  bat 'msbuild host_usb_mixer_control.vcxproj /property:Configuration=Release /property:Platform=x64'
-                }
-                bat 'mkdir Win\\x64'
-                bat 'mv bin/Release/x64/host_usb_mixer_control.exe Win/x64/xmos_mixer.exe'
-                archiveArtifacts artifacts: "Win/x64/xmos_mixer.exe", fingerprint: true
-              }
+              } // withVS()
             }
           }
           post {
@@ -286,18 +219,13 @@ pipeline {
             label 'x86_64 && linux'
           }
           steps {
-            dir("${REPO}") {
-              checkout_shallow()
-
-              clone_test_deps()
+            dir(REPO_NAME) {
+              checkoutScmShallow()
 
               withTools(params.TOOLS_VERSION) {
                 dir("tests") {
                   createVenv(reqFile: "requirements.txt")
                   withVenv {
-                    // Cross-product of all parameters in test_i2s_loopback produces invalid configs
-                    // which cannot be built. They are skipped in pytest, but the build failures
-                    // prevent all the XEs being built before running pytest.
                     dir("xua_sim_tests") {
                       sh 'cmake -G "Unix Makefiles" -B build'
 
@@ -308,9 +236,8 @@ pipeline {
                     }
 
                     dir("xua_unit_tests") {
-                      sh "cmake -G 'Unix Makefiles' -B build"
-                      sh 'xmake -C build -j 16'
-                      sh "pytest -v -n auto --junitxml=pytest_unit.xml"
+                      xcoreBuild()
+                      runPytest()
                     }
                   }
                 }
@@ -319,7 +246,7 @@ pipeline {
           }
           post {
             always {
-              junit "${REPO}/tests/**/pytest_*.xml"
+              junit "${REPO_NAME}/tests/**/pytest_*.xml"
             }
             cleanup {
               xcoreCleanSandbox()
@@ -334,35 +261,38 @@ pipeline {
           steps {
             println "Stage running on ${env.NODE_NAME}"
 
-            clone_test_deps()
-
-            dir("${REPO}") {
-              checkout_shallow()
+            dir(REPO_NAME) {
+              checkoutScmShallow()
             }
 
-            dir("hardware_test_tools/xmosdfu") {
-              unstash "macos_xmosdfu"
+            dir("${REPO_NAME}/tests/xua_hw_tests") {
+              unstash "hw_test_bin" // Unstash HW test DUT binaries
             }
-
-            dir("${REPO}/tests") {
+            dir("${REPO_NAME}/tests/xua_hw_tests/test_control/host")
+            {
+              unstash "host_control_test_bin_mac_arm" // Unstash host app for control test
+            }
+            dir("${REPO_NAME}/tests") {
               createVenv(reqFile: "requirements.txt")
               withTools(params.TOOLS_VERSION) {
-                dir("xua_hw_tests") {
-                  sh "cmake -G 'Unix Makefiles' -B build"
-                  sh "xmake -C build -j 8"
-
-                  withVenv {
-                    withXTAG(["usb_audio_mc_xcai_dut"]) { xtagIds ->
-                      sh "pytest -v --junitxml=pytest_hw_mac.xml --xtag-id=${xtagIds[0]}"
-                    }
+                withVenv {
+                  // Change directory into xmosdfu and unstash
+                  // Note hardcoded path to hardware_test_tools since it's installed as an editable requirement in requirements.txt
+                  dir("${env.VIRTUAL_ENV}/src/hardware-test-tools/xmosdfu") {
+                    unstash "macos_xmosdfu"
                   }
-                }
-              }
-            }
-          }
+                  dir("xua_hw_tests") {
+                    withXTAG(["usb_audio_mc_xcai_dut"]) { xtagIds ->
+                      sh "pytest -v --junitxml=pytest_hw_mac.xml --xtag-id=${xtagIds[0]} --level ${params.TEST_LEVEL}"
+                    }
+                  } // dir("xua_hw_tests")
+                } // withVenv
+              } // withTools(params.TOOLS_VERSION)
+            } // dir("${REPO_NAME}/tests")
+          } // steps
           post {
             always {
-              junit "${REPO}/tests/xua_hw_tests/pytest_hw_mac.xml"
+              junit "${REPO_NAME}/tests/xua_hw_tests/pytest_hw_mac.xml"
             }
             cleanup {
               xcoreCleanSandbox()
@@ -377,22 +307,25 @@ pipeline {
           steps {
             println "Stage running on ${env.NODE_NAME}"
 
-            clone_test_deps()
-
-            dir("${REPO}") {
-              checkout_shallow()
+            dir(REPO_NAME) {
+              checkoutScmShallow()
             }
 
-            dir("${REPO}/tests") {
+            dir("${REPO_NAME}/tests/xua_hw_tests") {
+              unstash "hw_test_bin" // Unstash HW test DUT binaries
+            }
+            dir("${REPO_NAME}/tests/xua_hw_tests/test_control/host")
+            {
+              unstash "host_control_test_bin_windows" // Unstash host app for control test
+            }
+
+            dir("${REPO_NAME}/tests") {
               createVenv(reqFile: "requirements.txt")
               withTools(params.TOOLS_VERSION) {
                 dir("xua_hw_tests") {
-                  sh "cmake -G 'Unix Makefiles' -B build"
-                  sh "xmake -C build"
-
                   withVenv {
                     withXTAG(["usb_audio_mc_xcai_dut"]) { xtagIds ->
-                      sh "pytest -v --junitxml=pytest_hw_win.xml --xtag-id=${xtagIds[0]}"
+                      sh "pytest -v --junitxml=pytest_hw_win.xml --xtag-id=${xtagIds[0]} --level ${params.TEST_LEVEL}"
                     }
                   }
                 }
@@ -401,7 +334,7 @@ pipeline {
           }
           post {
             always {
-              junit "${REPO}/tests/xua_hw_tests/pytest_hw_win.xml"
+              junit "${REPO_NAME}/tests/xua_hw_tests/pytest_hw_win.xml"
             }
             cleanup {
               xcoreCleanSandbox()
@@ -409,6 +342,14 @@ pipeline {
           }
         }  // Windows HW tests
       }
-    }  // Testing
-  }
-}
+    }  // stage('Testing')
+    stage('🚀 Release') {
+      when {
+      expression { triggerRelease.isReleasable() }
+      }
+      steps {
+        triggerRelease()
+      }
+    }
+  } // stages
+} // pipeline

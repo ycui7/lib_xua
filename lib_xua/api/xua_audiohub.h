@@ -1,9 +1,9 @@
-// Copyright 2011-2024 XMOS LIMITED.
+// Copyright 2011-2026 XMOS LIMITED.
 // This Software is subject to the terms of the XMOS Public Licence: Version 1.
 #ifndef _XUA_AUDIOHUB_H_
 #define _XUA_AUDIOHUB_H_
 
-#if(defined __XC__ || defined __DOXYGEN__)
+#if defined(__XC__) || defined(__DOXYGEN__)
 
 #include "xua.h"
 
@@ -66,10 +66,10 @@ void XUA_AudioHub(
 #if (XUA_SPDIF_RX_EN || XUA_ADAT_RX_EN || defined(__DOXYGEN__))
     , chanend c_dig
 #endif
-#if (XUA_SYNCMODE == XUA_SYNCMODE_SYNC || XUA_SPDIF_RX_EN || XUA_ADAT_RX_EN || defined(__DOXYGEN__))
+#if (ADJUSTABLE_MCLK_REQUIRED || defined(__DOXYGEN__))
     , chanend c_audio_rate_change
 #endif
-#if (((XUD_TILE != 0) && (AUDIO_IO_TILE == 0) && (XUA_DFU_EN == 1)) || defined(__DOXYGEN__))
+#if (((XUA_XUD_TILE_NUM != 0) && (XUA_AUDIO_IO_TILE_NUM == 0) && (XUA_DFU_EN == 1)) || defined(__DOXYGEN__))
    , NULLABLE_SERVER_INTERFACE(i_dfu, dfuInterface)
 #endif
 #if (XUA_NUM_PDM_MICS > 0 || defined(__DOXYGEN__))

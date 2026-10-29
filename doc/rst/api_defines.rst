@@ -15,12 +15,12 @@ This section fully documents all of the settable defines and their default value
 Code location (tile)
 --------------------
 
-.. doxygendefine:: AUDIO_IO_TILE
-.. doxygendefine:: XUD_TILE
-.. doxygendefine:: MIDI_TILE
-.. doxygendefine:: SPDIF_TX_TILE
-.. doxygendefine:: PDM_TILE
-.. doxygendefine:: PLL_REF_TILE
+.. doxygendefine:: XUA_AUDIO_IO_TILE_NUM
+.. doxygendefine:: XUA_XUD_TILE_NUM
+.. doxygendefine:: XUA_MIDI_TILE_NUM
+.. doxygendefine:: XUA_SPDIF_TX_TILE_NUM
+.. doxygendefine:: XUA_MIC_PDM_TILE_NUM
+.. doxygendefine:: XUA_PLL_REF_TILE_NUM
 
 Channel counts
 --------------
@@ -44,8 +44,9 @@ Audio Class
 -----------
 
 .. doxygendefine:: AUDIO_CLASS
-.. doxygendefine:: AUDIO_CLASS_FALLBACK
-.. doxygendefine:: FULL_SPEED_AUDIO_2
+.. doxygendefine:: XUA_AUDIO_CLASS_HS
+.. doxygendefine:: XUA_AUDIO_CLASS_FS
+
 
 Feature configuration
 ---------------------
@@ -81,13 +82,20 @@ PDM microphones
 ^^^^^^^^^^^^^^^
 
 .. doxygendefine:: XUA_NUM_PDM_MICS
+.. doxygendefine:: XUA_PDM_MIC_USE_PDM_ISR
+.. doxygendefine:: XUA_PDM_MIC_USE_DDR
+.. doxygendefine:: XUA_PDM_MIC_INDEX
 
 DFU
 ^^^
 
-.. doxygendefine:: XUA_DFU_EN
+Please see ``lib_dfu`` documentation for additional configuration options,
+these defines can be overridden in an optional header file ``xua_conf_dfu.h``
+file or in the application's ``CMakeLists.txt`` for the relevant build configuration.
 
-.. .. doxygendefine:: DFU_FLASH_DEVICE
+What was ``DFU_FLASH_DEVICE`` has moved to ``lib_dfu``, now called ``DFU_USER_FLASH_DEVICE``.
+
+.. doxygendefine:: XUA_DFU_EN
 
 HID
 ^^^
@@ -131,6 +139,9 @@ Output/playback
 .. doxygendefine:: STREAM_FORMAT_OUTPUT_2_DATAFORMAT
 .. doxygendefine:: STREAM_FORMAT_OUTPUT_3_DATAFORMAT
 
+.. doxygendefine:: XUA_OUTPUT_AUDIO20_CHANNEL_MASK
+.. doxygendefine:: XUA_OUTPUT_AUDIO10_CHANNEL_MASK
+
 Input/recording
 ^^^^^^^^^^^^^^^
 
@@ -156,15 +167,19 @@ Volume control
 Mixing
 ------
 
-.. doxygendefine:: MIXER
-.. doxygendefine:: MAX_MIX_COUNT
-.. doxygendefine:: MIX_INPUTS
-.. doxygendefine:: MIN_MIXER_VOLUME
-.. doxygendefine:: MAX_MIXER_VOLUME
-.. doxygendefine:: VOLUME_RES_MIXER
+.. doxygendefine:: XUA_MIXER_EN
+.. doxygendefine:: XUA_MAX_MIX_COUNT
+.. doxygendefine:: XUA_MIX_INPUTS
+.. doxygendefine:: XUA_MIN_MIXER_VOLUME
+.. doxygendefine:: XUA_MAX_MIXER_VOLUME
+.. doxygendefine:: XUA_VOLUME_RES_MIXER
+.. doxygendefine:: XUA_OUT_VOLUME_IN_MIXER
+.. doxygendefine:: XUA_OUT_VOLUME_AFTER_MIX
+.. doxygendefine:: XUA_IN_VOLUME_IN_MIXER
+.. doxygendefine:: XUA_IN_VOLUME_AFTER_MIX
 
 Power
 -----
 
 .. doxygendefine:: XUA_POWERMODE
-
+.. doxygendefine:: XUA_CHAN_BUFF_CTRL

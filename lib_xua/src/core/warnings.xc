@@ -1,9 +1,11 @@
-// Copyright 2013-2024 XMOS LIMITED.
+// Copyright 2013-2026 XMOS LIMITED.
 // This Software is subject to the terms of the XMOS Public Licence: Version 1.
 
 /*
-Warnings relating to configuration defines located in this XC source file rather than the xua_conf.h header file in order to avoid multiple warnings being issued when the xua_conf.h header file is included in multiple files.
-*/
+ * Warnings relating to configuration defines located in this XC source file rather than the xua_conf.h
+ * header file in order to avoid multiple warnings being issued when the xua_conf.h header file is
+ * included in multiple files.
+ */
 
 #include "xua_conf_full.h"
 
@@ -47,7 +49,7 @@ Warnings relating to configuration defines located in this XC source file rather
 #warning BCD_DEVICE not defined. Using XMOS release version number
 #endif
 
-#if (AUDIO_CLASS == 1) || (AUDIO_CLASS_FALLBACK)
+#if (XUA_AUDIO_CLASS_FS == 1)
 #ifndef PID_AUDIO_1
 #warning PID_AUDIO_1 not defined. Using 0x0003
 #endif
@@ -61,10 +63,6 @@ Warnings relating to configuration defines located in this XC source file rather
 #warning AUDIO_CLASS not defined, using 2
 #endif
 
-#ifndef AUDIO_CLASS_FALLBACK
-#warning AUDIO_CLASS_FALLBACK not defined, using 0 (i.e. disabled)
-#endif
-
 /* Sanity check on FS channel counts */
 #if (NUM_USB_CHAN_OUT_FS > NUM_USB_CHAN_OUT)
 #error NUM_USB_CHAN_OUT_FS expected to be less than or equal to NUM_USB_CHAN_OUT
@@ -74,4 +72,52 @@ Warnings relating to configuration defines located in this XC source file rather
 #error NUM_USB_CHAN_IN_FS expected to be less than or equal to NUM_USB_CHAN_IN
 #endif
 
+/* Run some checks WRT to low power modes */
+#if XUA_LOW_POWER_NON_STREAMING
+#if XUA_MIXER_EN
+#warning Enabling XUA_MIXER_EN when XUA_LOW_POWER_NON_STREAMING is enabled will result in the mixer stopping when USB audio streams are not active. Is this what you wanted?
 #endif
+#if (NUM_USB_CHAN_OUT == 0 && NUM_USB_CHAN_IN == 0)
+#error Disable XUA_LOW_POWER_NON_STREAMING if you wish to have a system with no USB audio streams. These features are incompatible.
+#endif
+#endif
+
+#ifdef XUA_CHAN_BUFF_CTRL
+#warning Using channel to control buffering - this may reduce performance but improve power consumption
+#endif
+
+#ifdef AUDIO_IO_TILE
+#warning "Use of AUDIO_IO_TILE is to be deprecated, use XUA_AUDIO_IO_TILE_NUM instead"
+#endif
+
+#ifdef XUD_TILE
+#warning "Use of XUD_TILE is to be deprecated, use XUA_XUD_TILE_NUM instead"
+#endif
+
+#ifdef MIDI_TILE
+#warning "Use of MIDI_TILE is to be deprecated, use XUA_MIDI_TILE_NUM instead"
+#endif
+
+#ifdef SPDIF_TX_TILE
+#warning "Use of SPDIF_TX_TILE is to be deprecated, use XUA_SPDIF_TX_TILE_NUM instead"
+#endif
+
+#ifdef PDM_TILE
+#warning "Use of PDM_TILE is to be deprecated, use XUA_MIC_PDM_TILE_NUM instead"
+#endif
+
+#ifdef PLL_REF_TILE
+#warning "Use of PLL_REF_TILE is to be deprecated, use XUA_PLL_REF_TILE_NUM instead"
+#endif
+
+#if XUA_FB_USE_REF_CLOCK
+    #if (!defined(XUA_FB_REF_MUL_48) || !defined(XUA_FB_REF_DIV_48) || !defined(XUA_FB_REF_MUL_44) || !defined(XUA_FB_REF_DIV_44))
+    #error "When using the reference clock, you must define XUA_FB_REF_MUL_48, XUA_FB_REF_DIV_48, XUA_FB_REF_MUL_44 and XUA_FB_REF_DIV_44"
+    #error "The value 100E6 * XUA_FB_REF_MUL / XUA_FB_REF_DIV must be exactly equal to the MCLK applied to AUDIO_IO_TILE"
+    #endif
+    #if XUA_ADAT_RX_EN || XUA_SPDIF_RX_EN
+    #error "XUA_FB_USE_REF_CLOCK not compatible with digital rx streams due to non phase-locked clock"
+    #endif
+#endif
+
+#endif // XUA_USB_EN
