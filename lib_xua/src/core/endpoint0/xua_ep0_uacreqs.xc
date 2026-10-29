@@ -126,6 +126,17 @@ static unsigned longMul(unsigned a, unsigned b, int prec)
     extern void AudioHwRemote_Volume_Update(chanend c_audiohwremote, unsigned reg, unsigned val);
 #endif
 
+/* Value forwarded to the codec: UAC2's -inf sentinel (0x8000) when the host has
+ * muted (master or any channel), the caller's dB otherwise. The board writes one
+ * value to both channel registers, so any-mute mutes; it turns -inf into minimum
+ * volume — mute needs no separate command. */
+static unsigned volOrMuteOut(unsigned dB)
+{
+    for (int i = 0; i <= NUM_USB_CHAN_OUT; i++)
+        if (mutesOut[i]) return (unsigned)0x8000;
+    return dB;
+}
+
 /* Update master volume i.e. i.e update weights for all channels */
 static void updateMasterVol(int unitID, chanend ?c_mix_ctl)
 {
@@ -158,8 +169,8 @@ static void updateMasterVol(int unitID, chanend ?c_mix_ctl)
                     {
                         unsigned int * unsafe multOutPtr = multOut;
 #ifdef SC_CLEARSOUND_DAC
-                        AudioHwRemote_Volume_Update((chanend)uc_audiohw2, (0), volsOut[0]);
-                        AudioHwRemote_Volume_Update((chanend)uc_audiohw2, (1), volsOut[0]);
+                        AudioHwRemote_Volume_Update((chanend)uc_audiohw2, (0), volOrMuteOut(volsOut[0]));
+                        AudioHwRemote_Volume_Update((chanend)uc_audiohw2, (1), volOrMuteOut(volsOut[0]));
 #else
                         multOutPtr[i-1] = x;
 #endif
@@ -242,7 +253,7 @@ static void updateVol(int unitID, int channel, chanend ?c_mix_ctl)
                 {
                     unsigned int * unsafe multOutPtr = multOut;
 #ifdef SC_CLEARSOUND_DAC
-                    AudioHwRemote_Volume_Update((chanend)uc_audiohw2, (channel-1), volsOut[channel]);
+                    AudioHwRemote_Volume_Update((chanend)uc_audiohw2, (channel-1), volOrMuteOut(volsOut[channel]));
 #else
                     multOutPtr[channel-1] = x;
 #endif
