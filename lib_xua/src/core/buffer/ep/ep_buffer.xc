@@ -838,6 +838,10 @@ void XUA_Buffer_Ep(
             /* MIDI IN to host */
             case XUD_SetData_Select(c_midi_to_host, ep_midi_to_host, result):
 
+#ifdef CSD_DIAG_TRACE
+                debug_printf("EPBUF: IN sent to host (SetData_Select) collected=%d\n",
+                             midi_data_collected_from_device);
+#endif
                 /* The buffer has been sent to the host, so we can ack the midi thread */
                 if (midi_data_collected_from_device != 0)
                 {
@@ -897,6 +901,11 @@ void XUA_Buffer_Ep(
                 else
                 {
                     /* The midi/uart thread has sent us some data - handshake back */
+#ifdef CSD_DIAG_TRACE
+                    debug_printf("EPBUF: midi got %08x collected=%d waiting=%d\n",
+                                 datum, midi_data_collected_from_device,
+                                 midi_waiting_on_send_to_host);
+#endif
                     midi_send_ack(c_midi);
                     if (midi_data_collected_from_device < MIDI_USB_BUFFER_TO_HOST_SIZE)
                     {
@@ -917,6 +926,10 @@ void XUA_Buffer_Ep(
                         swap(midi_to_host_buffer_being_collected, midi_to_host_buffer_being_sent);
 
                         // Signal other side to swap
+#ifdef CSD_DIAG_TRACE
+                        debug_printf("EPBUF: arm IN len=%d\n",
+                                     midi_data_collected_from_device);
+#endif
                         XUD_SetReady_InPtr(ep_midi_to_host, midi_to_host_buffer_being_sent, midi_data_collected_from_device);
                         midi_data_collected_from_device = 0;
                         midi_waiting_on_send_to_host = 1;

@@ -157,7 +157,27 @@ on tile[XUA_AUDIO_IO_TILE_NUM] : port p_for_mclk_count_audio        = PORT_MCLK_
 #endif /* __XS3A__ */
 #endif
 
-#ifdef MIDI
+#if defined(CSD_DIAG_MIDI)
+/* Diagnostic-build entry point, DEFINED BY THE APPLICATION
+ * (sw_usb_audio/clearsound_uac/src/extensions/csd_diag_midi.xc). Declared here
+ * instead of #including an app header so the library keeps no compile-time
+ * dependency on application sources -- same arrangement the app already uses
+ * for the weak AudioHw and UserBufferManagement hooks, just opt-in by macro.
+ * Parameter types mirror the definition exactly, including the port width
+ * conditional, or the compiler rejects it as an unknown identifier. */
+#if (MIDI_RX_PORT_WIDTH == 4)
+void csd_diag_midi(buffered in port:4 ?p_midi_in, port ?p_midi_out,
+                   clock ?clk_midi, chanend ?c_midi, unsigned cable_number);
+#else
+void csd_diag_midi(buffered in port:1 ?p_midi_in, port ?p_midi_out,
+                   clock ?clk_midi, chanend ?c_midi, unsigned cable_number);
+#endif
+
+/* Diagnostic build: the only MIDI entity is the USB endpoint. No physical
+ * UART pins or clock block are claimed, so the ports/clock below stay
+ * undeclared and the task runs on null resources. See
+ * sw_usb_audio/clearsound_uac/src/extensions/csd_diag_midi.xc. */
+#elif defined(MIDI)
 on tile[XUA_MIDI_TILE_NUM] :  port p_midi_tx                        = PORT_MIDI_OUT;
 
 #if(MIDI_RX_PORT_WIDTH == 4)
@@ -168,7 +188,7 @@ on tile[XUA_MIDI_TILE_NUM] :  buffered in port:1 p_midi_rx          = PORT_MIDI_
 #endif
 
 
-#ifdef MIDI
+#if defined(MIDI) && !defined(CSD_DIAG_MIDI)
 on tile[XUA_MIDI_TILE_NUM] : clock    clk_midi                      = CLKBLK_MIDI;
 #endif
 
@@ -675,12 +695,16 @@ int main()
         }
 #endif
 
-#ifdef MIDI
+#if defined(MIDI) || defined(CSD_DIAG_MIDI)
         /* MIDI core */
         on tile[XUA_MIDI_TILE_NUM]:
         {
             thread_speed();
+#if defined(CSD_DIAG_MIDI)
+            csd_diag_midi(null, null, null, c_midi, 0);
+#else
             usb_midi(p_midi_rx, p_midi_tx, clk_midi, c_midi, 0);
+#endif
         }
 #endif
 
