@@ -75,6 +75,27 @@ unsafe
 #endif
 }
 
+#if defined(CSD_GEN_EN) && defined(MIXER) && (MIXER)
+/* ClearSound function generator, PRE-mixer injection. DEFINED BY THE
+ * APPLICATION (sw_usb_audio/clearsound_uac/src/extensions/csd_gen.xc) and
+ * declared here rather than #included, so the library keeps no compile-time
+ * dependency on application sources -- the same arrangement main.xc uses for
+ * the CSD_DIAG_MIDI entry point. Parameter types must mirror the definition
+ * exactly, or the compiler rejects the call as unknown.
+ *
+ * Scalars in, scalar out, both directions: this file is library code and the
+ * mixer's tile placement is lib_xua's choice, so a pointer here would be
+ * correct only by accident of placement. The condition is spelled literally
+ * (matching CSD_GEN_PREMIX in csd_gen.h) rather than via that macro because
+ * this TU cannot include the app header -- if the two conditions ever drift,
+ * BOTH threads could advance the generator's NCO and every tone lands at
+ * exactly twice its commanded frequency, which is why the app rig tests the
+ * mixer build's counters explicitly. */
+void csd_gen_mix_begin(int hostL, int hostR, unsigned dsd_mode);
+int  csd_gen_mix_sample(unsigned ch, int host);
+void csd_mb_note_vol(unsigned index, unsigned val);
+#endif
+
 #if (XUA_MAX_MIX_COUNT > 0)
 int mix_mult_array[XUA_MAX_MIX_COUNT * XUA_MIX_INPUTS];
 #if (FAST_MIXER == 0)
@@ -429,6 +450,16 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
      */
     int mixer2_triggered = 1;
 #endif
+#if defined(CSD_GEN_EN) && defined(MIXER) && (MIXER)
+    /* Stream DSD mode as the host declared it (0 off, 1 DoP, 2 native, from
+     * XUA_AUD_SET_AUDIO_START). The generator's pre-mixer gate shuts on any
+     * non-zero value: native DSD needs all 32 payload bits untouched -- the
+     * volume paths above carry the same warning for the same reason. DoP is
+     * ALSO caught by the generator's own raw-frame vote (host alt settings
+     * declare DoP as PCM, so this variable alone would miss it); both
+     * mechanisms run, erring toward "is DSD". */
+    unsigned csd_dsd_mode = 0;
+#endif
 
     while (1)
     {
@@ -609,6 +640,16 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
                         index = inuint(c_mix_ctl);
                         val = inuint(c_mix_ctl);
                         inct(c_mix_ctl);
+#if defined(CSD_GEN_EN) && defined(MIXER) && (MIXER)
+                        /* Diagnostic, app-provided (csd_gen_mailbox.c): counts
+                         * the host volume commands that actually arrive HERE,
+                         * which is the question no earlier instrument could
+                         * answer -- amixer caches, raw control transfers never
+                         * landed, and this build prints nothing to the host.
+                         * Compiled out of every non-CSD build, so lib_xua's
+                         * stock behaviour is unchanged. */
+                        csd_mb_note_vol((unsigned)index, val);
+#endif
 
                         assert((index  < (NUM_USB_CHAN_OUT + 1)) && msg("Out volume index out of range"));
 
@@ -663,9 +704,20 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
                     unsigned sample_res = inuint(c_host);
                     pending_cmd[1] = dsd_mode;
                     pending_cmd[2] = sample_res;
+#if defined(CSD_GEN_EN) && defined(MIXER) && (MIXER)
+                    csd_dsd_mode = dsd_mode;
+#endif
                     break;
 
                 case XUA_AUD_SET_AUDIO_STOP:
+#if defined(CSD_GEN_EN) && defined(MIXER) && (MIXER)
+                    /* Fail-closed: a stale non-zero would permanently mute
+                     * the test tone; a stale zero can only let the tone
+                     * through while the generator's own raw-frame DoP vote
+                     * still guards the payload. Belt AND braces, in that
+                     * order. */
+                    csd_dsd_mode = 0;
+#endif
                     break;
 
                 default:
@@ -685,6 +737,40 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
         else
         {
             GetSamplesFromHost(c_host);
+#if defined(CSD_GEN_EN) && defined(MIXER) && (MIXER)
+            /* Function generator, PRE-mixer: SUM the wave into the host
+             * stream's mixer sources before doMix() reads them, so the tone
+             * rides the same mix matrix, routing and post-mix volume as real
+             * host audio (user requirement: "before the mixer, summed to the
+             * host audio stream"). Sum, never overwrite -- the mixer must
+             * still see the host stream to mix it. Saturation, DoP voting and
+             * the DSD gate all live in the application; this line is a data
+             * hand-off and nothing else.
+             *
+             * ptr_samples is written here inside mixer1's own window (after
+             * the mixer2 sync at the loop top, before this iteration's
+             * outuint(c_mixer2)), the same window GetSamplesFromHost itself
+             * writes in -- so the lock-step handshake that protects doMix
+             * protects this too. */
+            unsafe
+            {
+                int csd_h0 = (NUM_USB_CHAN_OUT > 0) ? ptr_samples[0] : 0;
+                int csd_h1 = (NUM_USB_CHAN_OUT > 1) ? ptr_samples[1] : 0;
+                csd_gen_mix_begin(csd_h0, csd_h1, csd_dsd_mode);
+#pragma loop unroll
+                for (int i = 0; i < NUM_USB_CHAN_OUT; i++)
+                {
+                    /* Read through a temp rather than `a[i] = f(i, a[i])`:
+                     * this codebase has already measured XC rejecting the
+                     * single-expression form through the unsafe accessors
+                     * (store(x, load(x)+1)), and sequencing costs nothing
+                     * here. */
+                    int csd_in = ptr_samples[i];
+                    int csd_out = csd_gen_mix_sample((unsigned)i, csd_in);
+                    ptr_samples[i] = csd_out;
+                }
+            }
+#endif
             GiveSamplesToHost(c_host, samples_to_host_map);
 
 #if (XUA_MAX_MIX_COUNT > 0)
