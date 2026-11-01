@@ -493,7 +493,8 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
      * re-acquired every sample period (an alloc bt per frame on the very
      * thread whose frame budget this instrument measures). */
     timer csd_t_mix;
-    unsigned csd_t_mix_t0, csd_t_mix_t1;
+    unsigned csd_t_mix_t0, csd_t_mix_t1, csd_t_mix_t2;
+    unsigned csd_t_mix_have;
 #endif
 
     while (1)
@@ -508,6 +509,16 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
         /* Request from audio()/mixer2() */
         request = inuint(c_audio);
 #if defined(CSD_GEN_EN) && defined(CSD_GEN_INSTRUMENT) && defined(MIXER) && (MIXER)
+        /* Second window: t1 was taken right after the sample exchange, so
+         * (now - t1) is everything mixer1 did AFTER unblocking audio() and
+         * BEFORE it could serve the next request -- which includes the
+         * generator hand-off and the DoP vote. The first window alone was not
+         * enough: those calls sit in the else-branch below, so they delay the
+         * start of the next frame without appearing in it. */
+        if (csd_t_mix_have) {
+            csd_t_mix :> csd_t_mix_t2;
+            csd_mb_note_mix_tail(csd_t_mix_t2 - csd_t_mix_t1);
+        }
         csd_t_mix :> csd_t_mix_t0;
         /* Tile[1] resource question, measured: audio() BLOCKS between sending
          * this token and getting the sample exchange back, and its I2S port
@@ -544,15 +555,41 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
          * DSD modes keep the word untouched -- for them 0x96.. IS silence
          * and the DoP/native gates rely on it.
          */
-#ifndef CSD_NO_PREFILL_FIX
-        /* CSD_NO_PREFILL_FIX=1 disables ONLY this zeroing, leaving the
-         * generator, its injection calls, the DoP vote and the instrument in
-         * place. Needed because this fix is itself inside #ifdef CSD_GEN_EN:
-         * if the matched A/B says gen-on FAILs and gen-off PASSes, the
-         * functional difference on this path is exactly these four lines, and
-         * the naive reading ("the generator content does it") would be wrong.
-         * A zeroing that only exists in the FAILING arm is a suspect until
-         * this arm says otherwise. */
+        /* ====================== REVERTED, KEPT FOR THE RECORD ======================
+         * The PCM prefill-token zeroing was TRIED and is REMOVED with data:
+         * it made case A dramatically WORSE, not better.
+         *
+         * Matched A/B, identical flags, one variable, n=3 cold loads each
+         * (rig/case_a_stats.py):
+         *   with the zeroing        median +24.9 dB over baseline (sigma 0.7)
+         *   zeroing removed         median  +8.4 dB (sigma 0.5)
+         *   gen calls removed too   +25.2 dB -- removing them changed nothing,
+         *                           so the zeroing alone was the ~16 dB term.
+         *
+         * Mechanism, consistent with every measurement: while decouple
+         * pre-buffers it echoes this token as the sample for every channel
+         * (~276 ms at first stream open). lib_xua's DSD underflow word
+         * 0x96969696 is a CONSTANT BIT PATTERN -- through the chip's
+         * decimation and analog chain it behaves like mild DC and the output
+         * stage barely moves. Replacing it with true zero puts the codec into
+         * its digital-zero state across the whole prefill window while the
+         * output stage unmutes, and the resulting transient is ~16 dB bigger.
+         * The frozen 0x96969696 the node instrument caught was therefore
+         * benign all along; the instrument could not see the backfire because
+         * its hook runs AFTER this block and dutifully reported the silence
+         * being manufactured -- "0 non-zero words" was an artefact of the
+         * fix itself.
+         *
+         * If PCM prefill ever needs to be content-controlled, do it with a
+         * CONSTANT non-zero pattern (the chip treats it as DC), never with
+         * forced zero during the unmute window.
+         * ===================================================================== */
+#ifdef CSD_PREFILL_ZERO_ANYWAY    /* opt-IN only: default builds exclude it.
+                                   * (First attempt used #ifndef and silently
+                                   * kept the zeroing in every build — the
+                                   * ab4 'revert' measured +24.8 dB because
+                                   * the fix was never actually removed.
+                                   * Verified by ab3 NOFIX at +8.4.) */
         if (csd_dsd_mode == 0u && request != 0u)
         {
             request = 0u;
@@ -591,6 +628,7 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
 #if defined(CSD_GEN_EN) && defined(CSD_GEN_INSTRUMENT) && defined(MIXER) && (MIXER)
             csd_t_mix :> csd_t_mix_t1;
             csd_mb_note_mix_busy(csd_t_mix_t1 - csd_t_mix_t0);
+            csd_t_mix_have = 1u;
 #endif
         }
         else
