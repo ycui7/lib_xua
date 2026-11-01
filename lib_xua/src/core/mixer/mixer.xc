@@ -1006,10 +1006,37 @@ void mixer(chanend c_mix_in, chanend c_mix_out, chanend c_mix_ctl)
     samples_mixer_outputs_ptr = array_to_xc_ptr((samples_mixer_outputs, unsigned[]));
 #endif
 
-    for (int i=0;i<NUM_USB_CHAN_OUT + NUM_USB_CHAN_IN + XUA_MAX_MIX_COUNT;i++)
+    /* Zero EVERY sample the mixer can put on the wire, not only ptr_samples.
+     *
+     * Bug (measured on ClearSoundDac, mixer build, MIXER=1 MAX_MIX_COUNT=4):
+     * GiveSamplesToDevice() reads ptr_vol_ctld_samples_to_device[i] whenever
+     * XUA_OUT_VOLUME_IN_MIXER && XUA_OUT_VOLUME_AFTER_MIX -- both default 1
+     * with MIXER on (xua_conf_default.h:1467/1477). That array was written
+     * only by do_output_volume_control(), which runs only once a host frame
+     * arrives, and was never initialised here. From boot to the first frame
+     * the mixer therefore sent uninitialized static RAM down the I2S/DAC
+     * path. The board's own capture tap caught it verbatim: a frozen
+     * 0x69696970 (-1.7 dBFS) at every range from 10 ms to 2 s on a cold
+     * board with NO stream ever opened, clean on the second open (the array
+     * had been written by then). That is the first-open pop the acoustic
+     * gate measures as case A, and why it survived every codec-register
+     * theory: it is digital content, upstream of the chip.
+     *
+     * Second hole in the same line: the loop bound was
+     * OUT + IN + MAX_MIX_COUNT while samples_array has one MORE element --
+     * the "off" channel at SOURCE_COUNT-1 that the mute/default mix maps
+     * point at. doMix() can read it as a source, so it had to be zeroed too.
+     */
+    for (int i=0;i<NUM_USB_CHAN_OUT + NUM_USB_CHAN_IN + XUA_MAX_MIX_COUNT + 1;i++)
     unsafe {
         ptr_samples[i] = 0;
     }
+#if (XUA_OUT_VOLUME_IN_MIXER && XUA_OUT_VOLUME_AFTER_MIX)
+    for (int i=0; i<NUM_USB_CHAN_OUT; i++)
+    unsafe {
+        ptr_vol_ctld_samples_to_device[i] = 0;
+    }
+#endif
 
     for (int i=0; i<NUM_USB_CHAN_OUT; i++)
     {
