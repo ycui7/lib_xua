@@ -544,10 +544,20 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
          * DSD modes keep the word untouched -- for them 0x96.. IS silence
          * and the DoP/native gates rely on it.
          */
+#ifndef CSD_NO_PREFILL_FIX
+        /* CSD_NO_PREFILL_FIX=1 disables ONLY this zeroing, leaving the
+         * generator, its injection calls, the DoP vote and the instrument in
+         * place. Needed because this fix is itself inside #ifdef CSD_GEN_EN:
+         * if the matched A/B says gen-on FAILs and gen-off PASSes, the
+         * functional difference on this path is exactly these four lines, and
+         * the naive reading ("the generator content does it") would be wrong.
+         * A zeroing that only exists in the FAILING arm is a suspect until
+         * this arm says otherwise. */
         if (csd_dsd_mode == 0u && request != 0u)
         {
             request = 0u;
         }
+#endif
 #endif
 #if defined(CSD_GEN_EN) && defined(CSD_GEN_INSTRUMENT) && defined(MIXER) && (MIXER)
         /* The trigger token doubles as the decouple's OUT-prefill word:
@@ -837,7 +847,17 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
         else
         {
             GetSamplesFromHost(c_host);
-#if defined(CSD_GEN_EN) && defined(MIXER) && (MIXER)
+#if defined(CSD_GEN_EN) && !defined(CSD_NO_GEN_CALLS) && defined(MIXER) && (MIXER)
+            /* CSD_NO_GEN_CALLS=1 removes ONLY the per-frame hand-off into the
+             * application generator (mix_begin / mix_sample) while keeping the
+             * prefill fix, the DSD latch and the instrument compiled in. The
+             * matched A/B (same passthrough flags, one variable) measured:
+             *   gen off  median +4.5 dB  (sigma 0.9, marginal)
+             *   gen on   median +25.2 dB (sigma 0.5, 3/3 FAIL)
+             * so ~21 dB of the artifact comes from code inside CSD_GEN_EN even
+             * though the generator boots OFF and all seven sample nodes read
+             * zero. This flag plus CSD_NO_PREFILL_FIX bisects that code into
+             * two arms per build instead of one. */
             /* Function generator, PRE-mixer: SUM the wave into the host
              * stream's mixer sources before doMix() reads them, so the tone
              * rides the same mix matrix, routing and post-mix volume as real
