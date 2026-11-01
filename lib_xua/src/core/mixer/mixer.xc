@@ -96,6 +96,10 @@ int  csd_gen_mix_sample(unsigned ch, int host);
 void csd_mb_note_vol(unsigned index, unsigned val);
 void csd_mb_note_mix_frame(void);   /* proof-of-life, csd_gen_mailbox.c */
 void csd_mb_note_mix_busy(unsigned delta_ticks);  /* audio-wait window peak  */
+void csd_mb_note_mix_tail(unsigned delta_ticks);  /* post-unblock window peak;
+ * prototype was missing and the call below only compiles when
+ * CSD_GEN_INSTRUMENT is defined -- a config no build script had ever set, so
+ * the hole stayed hidden until the DC rig (TODO item 2) turned it on. */
 void csd_mb_note_dac_sample(unsigned ch, unsigned node, int sample);
 void csd_mb_note_host_nonzero(unsigned ch, int sample, unsigned frame);
 /* Node ids DUPLICATED from csd_gen.h on purpose (same pattern as the
