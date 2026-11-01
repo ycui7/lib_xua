@@ -94,6 +94,17 @@ unsafe
 void csd_gen_mix_begin(int hostL, int hostR, unsigned dsd_mode);
 int  csd_gen_mix_sample(unsigned ch, int host);
 void csd_mb_note_vol(unsigned index, unsigned val);
+/* L/R trim (ClearSoundDac TODO 3+4): fold the channel trim multiplier into
+ * the output-volume multiplier. DEFINED BY THE APPLICATION
+ * (csd_gen_mailbox.c), declared here for the same reason as csd_gen_mix_*:
+ * the library keeps no compile-time dependency on application sources.
+ * Deliberately OUTSIDE the CSD_GEN_INSTRUMENT guard -- trim is production
+ * calibration and must link and run in release builds. Returns host_mult
+ * unchanged when the channel's trim is 0 dB, so an unset trim costs nothing.
+ * Condition spelled literally (MIXER) to match the app's define, per the
+ * note above: if the two ever drift, trim silently stops being applied, so
+ * rig/trim_reg_probe.py asserts the acoustic step on a RELEASE build too. */
+unsigned csd_mix_apply_trim(unsigned ch, unsigned host_mult);
 void csd_mb_note_mix_frame(void);   /* proof-of-life, csd_gen_mailbox.c */
 void csd_mb_note_mix_busy(unsigned delta_ticks);  /* audio-wait window peak  */
 void csd_mb_note_mix_tail(unsigned delta_ticks);  /* post-unblock window peak;
@@ -290,6 +301,12 @@ static inline void GetSamplesFromHost(chanend c)
 #if (XUA_OUT_VOLUME_IN_MIXER && !XUA_OUT_VOLUME_AFTER_MIX)
 #warning OUT Vols in mixer, BEFORE mix & map
             mult = multOut[i];
+#if defined(CSD_GEN_EN) && defined(MIXER) && (MIXER)
+            /* See do_output_volume_control(): same trim, same reason, this
+             * is the path taken when XUA_OUT_VOLUME_AFTER_MIX is 0. Hooking
+             * only one of the two is how the first cut missed the host. */
+            mult = (int)csd_mix_apply_trim((unsigned)i, (unsigned)mult);
+#endif
             {h, l} = macs(mult, sample, 0, 0);
             h<<=3;
 #if (STREAM_FORMAT_OUTPUT_RESOLUTION_32BIT_USED == 1)
@@ -439,6 +456,17 @@ static inline void do_output_volume_control(int out_ch_index)
 #endif
         mult = multOut[out_ch_index];
     }
+#if defined(CSD_GEN_EN) && defined(MIXER) && (MIXER)
+    /* L/R trim, applied to the SAME multiplier host volume uses. This is
+     * the only post-mix output-volume site in this configuration
+     * (XUA_OUT_VOLUME_AFTER_MIX is 1), which the bench confirmed: a host
+     * SET_CUR moved multOut[] here and nowhere else. Folding trim in here
+     * rather than at each caller is what makes "applied on every volume
+     * change" true by construction -- the multiplier is standing, so it
+     * rides host SET_CUR, button presses, and a bare re-apply alike, and
+     * there is no second path that could bypass it. */
+    mult = (int)csd_mix_apply_trim((unsigned)out_ch_index, (unsigned)mult);
+#endif
 #if defined(CSD_GEN_EN) && defined(CSD_GEN_INSTRUMENT) && defined(MIXER) && (MIXER)
     csd_mb_note_dac_sample((unsigned)out_ch_index, CSD_NODE_POSTMIX, sample);
 #endif
