@@ -79,6 +79,13 @@ void InitPorts_master
 
 unsigned dsdMode = DSD_MODE_OFF;
 
+#if defined(CSD_GEN_EN) && defined(MIXER) && (MIXER)
+/* Implemented in the application (csd_gen_mailbox.c): I2S-deadline monitor,
+ * see the call site in AudioHub_MainLoop. externs rather than an include
+ * because lib_xua must not depend on application headers. */
+void csd_mb_note_i2s_delta(unsigned short delta_ticks);
+#endif
+
 #if (DSD_CHANS_DAC != 0) && (NUM_USB_CHAN_OUT > 0)
 #include "audiohub_dsd.h"
 #endif
@@ -174,6 +181,24 @@ static inline int HandleSampleClock(int frameCount, buffered _XUA_CLK_DIR port:3
         asm volatile("ecallf %0":: "r" (diff == 32));
 #endif
         //xassert((diff == 32)); // compiling with asserts enabled has a separate set of problems, even without this check (sw_usb_audio issue 340)
+#if defined(CSD_GEN_EN) && defined(MIXER) && (MIXER)
+        /* I2S-deadline monitor -- the digital twin of the case-A question.
+         *
+         * concurrent_fork.py closed the fork on the FIRST stream after load:
+         * the mic hears +25.2 dB over the no-stream floor while the firmware
+         * records every DAC-bound word of that same stream as SILENCE (five
+         * nodes, peak -240 dBFS, self-checked against a real tone). So the
+         * sample VALUES are provably clean and something on the wire itself
+         * is wrong. If mixer1 misses the sample period, this port timestamp
+         * delta drifts from its 32-tick budget: the loop then re-emits a
+         * frame, or the BCLK/LRCLK edges stretch, and the codec synthesises
+         * periodic garbage from a clean-but-late bitstream. This is exactly
+         * what XMOS' own -DENABLE_I2S_TIMING_CHECK / ecallf catches ("to fix
+         * I2S timing violation causing intermittent test failures",
+         * sw_usb_audio changelog) -- ecallf is fatal here, so we count.
+         * Writer: audio() task. Read: csd_mb_get_i2s_* over SCPI. */
+        csd_mb_note_i2s_delta(diff);
+#endif
     }
     prev_port_ts = port_ts;
 

@@ -94,6 +94,24 @@ unsafe
 void csd_gen_mix_begin(int hostL, int hostR, unsigned dsd_mode);
 int  csd_gen_mix_sample(unsigned ch, int host);
 void csd_mb_note_vol(unsigned index, unsigned val);
+void csd_mb_note_mix_frame(void);   /* proof-of-life, csd_gen_mailbox.c */
+void csd_mb_note_mix_busy(unsigned delta_ticks);  /* audio-wait window peak  */
+void csd_mb_note_dac_sample(unsigned ch, unsigned node, int sample);
+void csd_mb_note_host_nonzero(unsigned ch, int sample, unsigned frame);
+/* Node ids DUPLICATED from csd_gen.h on purpose (same pattern as the
+ * CSD_GEN_PREMIX condition above): this TU cannot include the application
+ * header. If they drift, the instrument reports node labels wrong -- audio
+ * is untouched, so the cost of drift is a confusing rig, not a fault. Keep
+ * in sync. */
+#define CSD_NODE_HOST    0u   /* received from host (GetSamplesFromHost)      */
+#define CSD_NODE_POSTMIX 1u   /* read from ptr_samples post-mix/pre-volume    */
+#define CSD_NODE_VOLUME  2u   /* after the output-volume MAC                  */
+#define CSD_NODE_DAC     3u   /* the word mixer1 handed to the audio thread   */
+#define CSD_NODE_TOKEN   4u   /* trigger token from the audio thread          */
+/* Diagnostic frame counter for the host-node first-nonzero timing. File
+ * scope because GetSamplesFromHost() is its own inline function, not mixer1
+ * text; written and read only from the mixer thread. */
+static unsigned csd_mix_frame_ix = 0;
 #endif
 
 #if (XUA_MAX_MIX_COUNT > 0)
@@ -276,6 +294,10 @@ static inline void GetSamplesFromHost(chanend c)
 #endif
             sample = h;
 #endif
+#if defined(CSD_GEN_EN) && defined(CSD_GEN_INSTRUMENT) && defined(MIXER) && (MIXER)
+            csd_mb_note_dac_sample((unsigned)i, CSD_NODE_HOST, sample);
+            csd_mb_note_host_nonzero((unsigned)i, sample, csd_mix_frame_ix);
+#endif
             ptr_samples[i] = sample;
         }
     }
@@ -311,6 +333,13 @@ static inline void GiveSamplesToDevice(chanend c, volatile int * unsafe deviceMa
             sample = ptr_samples[i];
         }
 #endif
+#endif
+#if defined(CSD_GEN_EN) && defined(CSD_GEN_INSTRUMENT) && defined(MIXER) && (MIXER)
+        /* DELIBERATELY AFTER every #if above: a hook inside one volume path
+         * would read 0 -- a false "words are clean" -- whenever the build
+         * takes the other path. Four nodes total on this path (see the
+         * CSD_NODE_* defines); removed once case A is attributed. */
+        csd_mb_note_dac_sample((unsigned)i, CSD_NODE_DAC, sample);
 #endif
         outuint(c, sample);
     }
@@ -406,6 +435,9 @@ static inline void do_output_volume_control(int out_ch_index)
 #endif
         mult = multOut[out_ch_index];
     }
+#if defined(CSD_GEN_EN) && defined(CSD_GEN_INSTRUMENT) && defined(MIXER) && (MIXER)
+    csd_mb_note_dac_sample((unsigned)out_ch_index, CSD_NODE_POSTMIX, sample);
+#endif
 
     /* Do volume control processing */
     {h, l} = macs(mult, sample, 0, 0);
@@ -414,13 +446,11 @@ static inline void do_output_volume_control(int out_ch_index)
     h |= (l >>29)& 0x7; // Note: This step is not required if we assume sample depth is 24bit (rather than 32bit)
                         // Note: We need all 32bits for Native DSD
 #endif
+#if defined(CSD_GEN_EN) && defined(CSD_GEN_INSTRUMENT) && defined(MIXER) && (MIXER)
+    csd_mb_note_dac_sample((unsigned)out_ch_index, CSD_NODE_VOLUME, h);
+#endif
     unsafe
     {
-        /*
-         * Store in a different array from where it can be read out in GiveSamplesToDevice().
-         * Note: It's important to save it in a different array, and not back in ptr_samples, since the
-         * volume controlled output should not be fed back in the mixer (unless OUT_VOLUME_BEFORE_MIX is enabled)
-        */
         ptr_vol_ctld_samples_to_device[out_ch_index] = h;
     }
 }
@@ -459,6 +489,11 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
      * declare DoP as PCM, so this variable alone would miss it); both
      * mechanisms run, erring toward "is DSD". */
     unsigned csd_dsd_mode = 0;
+    /* Hoisted out of the loop body: a timer declared inside would be
+     * re-acquired every sample period (an alloc bt per frame on the very
+     * thread whose frame budget this instrument measures). */
+    timer csd_t_mix;
+    unsigned csd_t_mix_t0, csd_t_mix_t1;
 #endif
 
     while (1)
@@ -472,6 +507,67 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
 #endif
         /* Request from audio()/mixer2() */
         request = inuint(c_audio);
+#if defined(CSD_GEN_EN) && defined(CSD_GEN_INSTRUMENT) && defined(MIXER) && (MIXER)
+        csd_t_mix :> csd_t_mix_t0;
+        /* Tile[1] resource question, measured: audio() BLOCKS between sending
+         * this token and getting the sample exchange back, and its I2S port
+         * deadline is the hard one (xua_audiohub.xc:192 "If mixer1 misses the
+         * sample period, this port timestamp..."). The window that matters is
+         * therefore inuint(c_audio) -> GiveSamplesToDevice: everything mixer1
+         * does with the audio thread waiting (generator NCO, volume MACs, the
+         * instrument itself). Peak of that delta in timer ticks, 12500 ticks
+         * = one 48 kHz frame at 600 MHz fast-mode.
+         *
+         * The timer is hoisted to the loop scope on purpose: a resource
+         * declared in the loop body is re-acquired every frame (an alloc bt
+         * per sample period on a thread whose budget we are measuring). */
+#endif
+#if defined(CSD_GEN_EN) && defined(MIXER) && (MIXER)
+        /* ---- case-A fix: the PCM prefill word must be SILENCE ----
+         *
+         * This token is echoed by the decouple as the sample for every
+         * channel while it pre-buffers (decouple.xc handle_audio_request:
+         * outuint(c_mix_out, underflowSample)). The audiohub derives it from
+         * its dsdMode: 0x96969696 is lib_xua's native-DSD underflow word
+         * (xua_audiohub.xc:228), and a DSD-silent word is NOT silent for
+         * PCM -- it is a full-scale-ish pattern (peak measured +1.4 dBFS
+         * into the DAC path) held for the whole prefill, ~13 266 words =
+         * 276 ms, once per boot. That is the acoustic gate's case A: mic
+         * hears +11.7/+12.9 dB over the no-stream floor on a stream of
+         * digital zeros, confined to the FIRST stream after load, while
+         * every digital node downstream faithfully carries it (instrument:
+         * rig/dac_node_probe2.py, MIXer:DACPeak? at 5 nodes).
+         *
+         * The mixer knows this stream's DSD mode (XUA_AUD_SET_AUDIO_START,
+         * csd_dsd_mode below), so it is the right place to enforce the
+         * invariant: prefill in PCM => the substituted sample is zero.
+         * DSD modes keep the word untouched -- for them 0x96.. IS silence
+         * and the DoP/native gates rely on it.
+         */
+        if (csd_dsd_mode == 0u && request != 0u)
+        {
+            request = 0u;
+        }
+#endif
+#if defined(CSD_GEN_EN) && defined(CSD_GEN_INSTRUMENT) && defined(MIXER) && (MIXER)
+        /* The trigger token doubles as the decouple's OUT-prefill word:
+         * handle_audio_request echoes the word it received as the sample for
+         * every channel while outUnderflow. So whatever value the audio
+         * thread sent HERE is what the host node sees during prefill. The
+         * audiohub sends `underflowWord`, which is 0x96969696 when its
+         * local dsdMode read NATIVE at audio() entry (xua_audiohub.xc:228)
+         * -- the exact word caught at the host node on the first stream.
+         * Peaking the token separates 'audiohub sent the DSD word' (fix the
+         * word / the mode latch) from 'decouple substituted something'. */
+        csd_mb_note_dac_sample(0u, CSD_NODE_TOKEN, (int)request);
+        csd_mix_frame_ix++;
+        /* Proof-of-life for THIS loop, once per sample period. See
+         * csd_mb_note_mix_frame (csd_gen_mailbox.c): the case-A ladder
+         * implicated mixer activity; if a streamed zero file leaves this at
+         * zero, mixer1 never ran and nothing downstream of here can be the
+         * source. */
+        csd_mb_note_mix_frame();
+#endif
 
         // Check if cmd is pending from last exchange with decoupler.
         // If no command pending, transfer sample with audiohub to unblock it as
@@ -482,6 +578,10 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
         {
             GiveSamplesToDevice(c_audio, samples_to_device_map);
             GetSamplesFromDevice(c_audio);
+#if defined(CSD_GEN_EN) && defined(CSD_GEN_INSTRUMENT) && defined(MIXER) && (MIXER)
+            csd_t_mix :> csd_t_mix_t1;
+            csd_mb_note_mix_busy(csd_t_mix_t1 - csd_t_mix_t0);
+#endif
         }
         else
         {
@@ -640,7 +740,7 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
                         index = inuint(c_mix_ctl);
                         val = inuint(c_mix_ctl);
                         inct(c_mix_ctl);
-#if defined(CSD_GEN_EN) && defined(MIXER) && (MIXER)
+#if defined(CSD_GEN_EN) && defined(CSD_GEN_INSTRUMENT) && defined(MIXER) && (MIXER)
                         /* Diagnostic, app-provided (csd_gen_mailbox.c): counts
                          * the host volume commands that actually arrive HERE,
                          * which is the question no earlier instrument could
