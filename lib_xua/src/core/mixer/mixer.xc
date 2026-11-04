@@ -93,6 +93,12 @@ unsafe
  * mixer build's counters explicitly. */
 void csd_gen_mix_begin(int hostL, int hostR, unsigned dsd_mode);
 int  csd_gen_mix_sample(unsigned ch, int host);
+/* Owner spec 2026-11-04 split (MAX_MIX_COUNT==0 path, see the injection
+ * block): volume on the USB-audio component only, FG summed post-volume
+ * unscaled. Same declaration discipline as above: scalars, mirrors the
+ * app definitions in csd_gen.xc. */
+int  csd_gen_mix_host_only(unsigned ch, int host);
+int  csd_gen_mix_post_volume(unsigned ch, int volled_host);
 void csd_mb_note_vol(unsigned index, unsigned val);
 /* L/R trim (ClearSoundDac TODO 3+4): fold the channel trim multiplier into
  * the output-volume multiplier. DEFINED BY THE APPLICATION
@@ -947,6 +953,25 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
                 int csd_h0 = (NUM_USB_CHAN_OUT > 0) ? ptr_samples[0] : 0;
                 int csd_h1 = (NUM_USB_CHAN_OUT > 1) ? ptr_samples[1] : 0;
                 csd_gen_mix_begin(csd_h0, csd_h1, csd_dsd_mode);
+#if (XUA_MAX_MIX_COUNT == 0)
+                /* Owner spec 2026-11-04 (the shipped shape: MIXER=1,
+                 * MAX_MIX_COUNT=0 -- matrix and mixer2 are dead work here,
+                 * see clearsound-dac-xmos/references/mixer-topology-dead-
+                 * matrix.md): the volume calculation applies to the
+                 * USB-audio component ONLY; FG carries no volume. So at
+                 * this pre-volume point we scale host by w_host and DO NOT
+                 * sum the wave; csd_gen_mix_post_volume() adds the wave,
+                 * unscaled, after the output-volume loop below. The old
+                 * single mix_sample() here multiplied host+FG together on
+                 * SET_CUR -- the tone ducked with the music. */
+#pragma loop unroll
+                for (int i = 0; i < NUM_USB_CHAN_OUT; i++)
+                {
+                    int csd_in = ptr_samples[i];
+                    int csd_out = csd_gen_mix_host_only((unsigned)i, csd_in);
+                    ptr_samples[i] = csd_out;
+                }
+#else
 #pragma loop unroll
                 for (int i = 0; i < NUM_USB_CHAN_OUT; i++)
                 {
@@ -959,6 +984,7 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
                     int csd_out = csd_gen_mix_sample((unsigned)i, csd_in);
                     ptr_samples[i] = csd_out;
                 }
+#endif
             }
 #endif
             GiveSamplesToHost(c_host, samples_to_host_map);
@@ -1061,6 +1087,31 @@ static void mixer1(chanend c_host, chanend c_mix_ctl, chanend ?c_mixer2, chanend
             }
             }
         }
+#if defined(CSD_GEN_EN) && !defined(CSD_NO_GEN_CALLS) && defined(MIXER) && (MIXER) && (XUA_MAX_MIX_COUNT == 0)
+        /* ---- FG sum, POST-volume (owner spec 2026-11-04) --------------
+         * The loop above wrote the volume-scaled host words into
+         * ptr_vol_ctld_samples_to_device[] -- exactly the array
+         * GiveSamplesToDevice() reads under XUA_OUT_VOLUME_IN_MIXER &&
+         * XUA_OUT_VOLUME_AFTER_MIX (mixer.xc:340). Sum the frame's FG
+         * wave HERE, unscaled: SET_CUR then moves only the USB-audio
+         * component, and the test tone keeps its own level to the DAC.
+         * The sum saturates (csd_gen_sat64). Gen OFF, DSD or DoP =>
+         * valid==0 and post_volume() returns the word byte-exact, so
+         * payload paths are untouched and the bit-perfect rig's MIXER=0
+         * expectation still holds with the generator disarmed.
+         * mixer1 ONLY: the one-NCO-owner rule in csd_gen.xc:394 forbids
+         * calling this from mixer2. */
+        unsafe
+        {
+#pragma loop unroll
+            for (int i = 0; i < NUM_USB_CHAN_OUT; i++)
+            {
+                int csd_v = ptr_vol_ctld_samples_to_device[i];
+                int csd_s = csd_gen_mix_post_volume((unsigned)i, csd_v);
+                ptr_vol_ctld_samples_to_device[i] = csd_s;
+            }
+        }
+#endif
     #endif
         }
     }
