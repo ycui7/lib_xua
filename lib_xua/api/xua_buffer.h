@@ -144,7 +144,14 @@ void XUA_Buffer_Decouple(chanend c_audio_out
 when the 4th packet gets written to the buffer, there's space to accommodate the next packet, otherwise handle_audio_request() will
 drop packets after writing the 4th packet in the buffer
 */
+/* Device-side ISO buffer depth in packets. Overridable so it can be A/B'd as a
+ * single build flag without editing the library: at 384 kHz high-speed one
+ * packet = 48 frames, so 5 packets = 240 frames = 625 us of decoupling between
+ * ISO arrival and the I2S core's consumption. Used to test whether the residual
+ * ~1-frame/s underflow at 384 kHz @ 600 MHz is delivery margin. Default 5. */
+#ifndef BUFFER_PACKET_COUNT
 #define BUFFER_PACKET_COUNT (5)
+#endif
 
 #define BUFF_SIZE_OUT_HS    (MAX_DEVICE_AUD_PACKET_SIZE_OUT_HS * BUFFER_PACKET_COUNT)
 #define BUFF_SIZE_OUT_FS    (MAX_DEVICE_AUD_PACKET_SIZE_OUT_FS * BUFFER_PACKET_COUNT)
