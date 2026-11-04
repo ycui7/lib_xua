@@ -122,8 +122,12 @@ static unsigned longMul(unsigned a, unsigned b, int prec)
 }
 
 #ifdef SC_CLEARSOUND_DAC
-    unsafe chanend uc_audiohw2;
-    extern void AudioHwRemote_Volume_Update(chanend c_audiohwremote, unsigned reg, unsigned val);
+    /* chanend diet 2026-11-04: this file-scope `unsafe chanend uc_audiohw2;`
+     * was the ep0 end of the volume channel. ep0 and the codec server share
+     * tile[0] (main.xc par, on tile[XUD_TILE_NUM]), so the pair delivered an
+     * intra-tile message at the price of 2 of tile[0]'s 32 chanends. The
+     * update now rides csd_vol_mailbox.c (same-tile seqlock statics). */
+    extern void AudioHwRemote_Volume_Update(unsigned reg, unsigned val);
 #endif
 
 /* Value forwarded to the codec: UAC2's -inf sentinel (0x8000) when the host has
@@ -169,8 +173,8 @@ static void updateMasterVol(int unitID, chanend ?c_mix_ctl)
                     {
                         unsigned int * unsafe multOutPtr = multOut;
 #ifdef SC_CLEARSOUND_DAC
-                        AudioHwRemote_Volume_Update((chanend)uc_audiohw2, (0), volOrMuteOut(volsOut[0]));
-                        AudioHwRemote_Volume_Update((chanend)uc_audiohw2, (1), volOrMuteOut(volsOut[0]));
+                        AudioHwRemote_Volume_Update((0), volOrMuteOut(volsOut[0]));
+                        AudioHwRemote_Volume_Update((1), volOrMuteOut(volsOut[0]));
 #else
                         multOutPtr[i-1] = x;
 #endif
@@ -253,7 +257,7 @@ static void updateVol(int unitID, int channel, chanend ?c_mix_ctl)
                 {
                     unsigned int * unsafe multOutPtr = multOut;
 #ifdef SC_CLEARSOUND_DAC
-                    AudioHwRemote_Volume_Update((chanend)uc_audiohw2, (channel-1), volOrMuteOut(volsOut[channel]));
+                    AudioHwRemote_Volume_Update((channel-1), volOrMuteOut(volsOut[channel]));
 #else
                     multOutPtr[channel-1] = x;
 #endif
