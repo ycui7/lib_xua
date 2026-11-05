@@ -86,6 +86,26 @@ unsigned dsdMode = DSD_MODE_OFF;
 void csd_mb_note_i2s_delta(unsigned short delta_ticks);
 #endif
 
+#if defined(CSD_LOOPBACK_TAP)
+/* Implemented in the application (csd_gen_mailbox.c): DAC->ADC loopback tap
+ * for bit-perfect validation -- the words about to go to the DAC port are
+ * substituted into the ADC slots that stream to the host, so the host can
+ * compare its own playback stream against what the device reached at the
+ * I2S boundary. Deliberately NOT guarded by CSD_GEN_EN/MIXER as the hook
+ * above is: validation must run with the generator OFF and the mixer in its
+ * shipping shape, so the tap cannot be tied to either.
+ * externs rather than an include, same reason as above: lib_xua must not
+ * depend on application headers. */
+void     csd_mb_loop_put(unsigned ch, unsigned word);
+unsigned csd_mb_loop_take(unsigned ch, unsigned fallback);
+/* Per-site arrival counters: the two TX call sites below pass their own site
+ * number so the device can report, per channel, where puts actually land.
+ * Both sites read frameCount+i in source and look correct, yet on hardware
+ * both capture channels returned host R's word -- source review was not
+ * sufficient, hence the instrumented counters. */
+void     csd_mb_loop_put_site(unsigned site, unsigned ch, unsigned word);
+#endif
+
 #if (DSD_CHANS_DAC != 0) && (NUM_USB_CHAN_OUT > 0)
 #include "audiohub_dsd.h"
 #endif
@@ -375,6 +395,29 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                     }
 #else
                     samplesIn[buffIndex][chanIndex] = sample;
+#ifdef CSD_LOOPBACK_TAP
+                    /* Inject AFTER the port read and its bitrev, so the word
+                     * the host receives is exactly the word the TX tap
+                     * recorded -- the pair composes to the identity and the
+                     * rig compares like-for-like with no transform.
+                     *
+                     * Exactly ONE call per channel per frame: take() reads
+                     * volatile state that the TX half of this same loop writes,
+                     * so calling it twice could return two different words and
+                     * validate one while injecting the other. When disarmed it
+                     * returns `fallback`, i.e. `sample`, so the store below is
+                     * a no-op and the audio path is untouched.
+                     *
+                     * chanIndex is the inverse of the TX channel index used in
+                     * csd_mb_loop_put: TX writes samplesOut[frameCount + i]
+                     * with i==0, so 0=L, 1=R, and here chanIndex resolves to
+                     * the same 0/1 for the two half-frames of one LRCLK cycle.
+                     * If I2S_CHANS_* ever changes, BOTH sites must be
+                     * re-derived from that identity -- they cannot be reviewed
+                     * independently. */
+                    sample = csd_mb_loop_take(chanIndex, sample);
+                    samplesIn[buffIndex][chanIndex] = sample;
+#endif
 #endif /* (AUD_TO_USB_RATIO > 1) */
                 }
 #endif
@@ -404,6 +447,17 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                                                                                  src_ff3v_fir_coefs[2-audioToUsbRatioCounter]);
                     }
 #endif /* (AUD_TO_USB_RATIO > 1) */
+#ifdef CSD_LOOPBACK_TAP
+                    /* Tap BEFORE bitrev and before the port write: the value
+                     * recorded is the word we intend the wire to carry, which
+                     * is what the rig compares against its own golden bytes.
+                     * The port's own buffer, the serialiser and the pin are
+                     * outside this tap by design -- see csd_gen.h.
+                     * Channel index = frameCount + i, the same expression the
+                     * write below uses, so TX and its matching RX injection
+                     * cannot drift apart on a channel-count change. */
+                    csd_mb_loop_put_site(0u, frameCount + i, samplesOut[frameCount +i]);
+#endif
                     if(XUA_I2S_N_BITS == 32)
                         p_i2s_dac[index++] <: bitrev(samplesOut[frameCount +i]);
                     else
@@ -504,6 +558,15 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                     }
 #else
                     samplesIn[buffIndex][chanIndex] = sample;
+#ifdef CSD_LOOPBACK_TAP
+                    /* Second half of the LRCLK frame (see the identical
+                     * injection in the first half-frame above for why this is
+                     * ONE call and why chanIndex is the TX channel index's
+                     * inverse). Both halves must carry it or the device would
+                     * loop back L and report the real mic on R. */
+                    sample = csd_mb_loop_take(chanIndex, sample);
+                    samplesIn[buffIndex][chanIndex] = sample;
+#endif
 #endif /* (AUD_TO_USB_RATIO > 1) && !I2S_DOWNSAMPLE_MONO_IN */
                 }
 #endif /* I2S_CHANS_ADC != 0) */
@@ -531,6 +594,9 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                                                                                  src_ff3v_fir_coefs[2-audioToUsbRatioCounter]);
                     }
 #endif /* (AUD_TO_USB_RATIO > 1) */
+#ifdef CSD_LOOPBACK_TAP
+                    csd_mb_loop_put_site(1u, frameCount + i, samplesOut[frameCount + i]);
+#endif
                     if(XUA_I2S_N_BITS == 32)
                         p_i2s_dac[index++] <: bitrev(samplesOut[frameCount + i]);
                     else
