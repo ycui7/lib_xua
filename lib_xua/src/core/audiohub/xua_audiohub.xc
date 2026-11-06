@@ -79,7 +79,15 @@ void InitPorts_master
 
 unsigned dsdMode = DSD_MODE_OFF;
 
-#if defined(CSD_GEN_EN) && defined(MIXER) && (MIXER)
+/* Opt-in, and deliberately narrower than CSD_GEN_EN.
+ *
+ * This monitor is a call from HandleSampleClock -- the per-frame deadline path
+ * that arms the I2S port tiles -- into application code the compiler cannot see
+ * or inline. It is instrumentation, and instrumentation that changes the timing
+ * of the path it measures is worthless there. Measured cost of leaving it in by
+ * default: the built-in mic path delivered constant zero on both channels.
+ * So ask for it by name with -DCSD_MB_I2S_MONITOR when you want the numbers. */
+#if defined(CSD_GEN_EN) && defined(MIXER) && (MIXER) && defined(CSD_MB_I2S_MONITOR)
 /* Implemented in the application (csd_gen_mailbox.c): I2S-deadline monitor,
  * see the call site in AudioHub_MainLoop. externs rather than an include
  * because lib_xua must not depend on application headers. */
@@ -201,7 +209,7 @@ static inline int HandleSampleClock(int frameCount, buffered _XUA_CLK_DIR port:3
         asm volatile("ecallf %0":: "r" (diff == 32));
 #endif
         //xassert((diff == 32)); // compiling with asserts enabled has a separate set of problems, even without this check (sw_usb_audio issue 340)
-#if defined(CSD_GEN_EN) && defined(MIXER) && (MIXER)
+#if defined(CSD_GEN_EN) && defined(MIXER) && (MIXER) && defined(CSD_MB_I2S_MONITOR)
         /* I2S-deadline monitor -- the digital twin of the case-A question.
          *
          * concurrent_fork.py closed the fork on the FIRST stream after load:
