@@ -106,4 +106,15 @@ void UserBufferManagement(unsigned sampsFromUsbToAudio[], unsigned sampsFromAudi
  */
 void UserBufferManagementInit(unsigned sampFreq);
 
+#ifdef CSD_UPS_ASYNC
+/**
+ * Runtime USB->I2S rate ratio for the CSD upsampler: the wire (LRCLK =
+ * MCLK/128) paces the audiohub loop and one host pair is consumed every
+ * `ratio` LRCLK frames. Accepts 2/4/8; anything else falls back to stock
+ * ratio 1. Call from the audio-hub core's rate-change path (AudioHwConfig)
+ * only -- the static lives on that core.
+ */
+void xua_csd_set_usb_ratio(unsigned r);
+#endif
+
 #endif // _XUA_AUDIOHUB_H_

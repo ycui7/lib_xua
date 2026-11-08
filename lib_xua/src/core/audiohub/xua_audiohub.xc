@@ -114,8 +114,29 @@ unsigned csd_mb_loop_take(unsigned ch, unsigned fallback);
 void     csd_mb_loop_put_site(unsigned site, unsigned ch, unsigned word);
 #endif
 
+#if defined(CSD_UPS_ASYNC)
+/* Runtime USB->I2S ratio (owner directive 2026-11-08): the wire (LRCLK =
+ * MCLK/128) paces the loop; one host pair is consumed every `ratio` frames.
+ * Implemented in the application's C module; externs rather than an include,
+ * same reason as above: lib_xua must not depend on application headers.
+ * Words by value: no XC/C pointer-kind mismatch across translation units. */
+int csd_ups_slot(unsigned ch, int w);
+#endif
+
 #if (DSD_CHANS_DAC != 0) && (NUM_USB_CHAN_OUT > 0)
 #include "audiohub_dsd.h"
+#endif
+
+#if defined(CSD_UPS_ASYNC)
+/* File-scope on purpose: AudioHwConfig and the audio loop share this core, so
+ * the rate-change path hands the ratio over without a channel. 1 = stock
+ * behaviour (host pair every LRCLK frame); 2/4/8 only while the CSD
+ * upsampler is armed. Anything else falls back to 1. */
+static unsigned g_csd_usb_ratio = 1;
+void xua_csd_set_usb_ratio(unsigned r)
+{
+    g_csd_usb_ratio = (r == 8u || r == 4u || r == 2u) ? r : 1u;
+}
 #endif
 
 #if (XUA_ADAT_TX_EN)
@@ -455,6 +476,21 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                                                                                  src_ff3v_fir_coefs[2-audioToUsbRatioCounter]);
                     }
 #endif /* (AUD_TO_USB_RATIO > 1) */
+#ifdef CSD_UPS_ASYNC
+                    if (g_csd_usb_ratio > 1u) {
+                        /* Wire-rate slot (owner directive 2026-11-08): the
+                         * word for this slot comes from the upsampler's
+                         * band-limited queue, not from the host pair sitting
+                         * in samplesOut. csd_ups_slot returns the input word
+                         * untouched when the path is not active, so a
+                         * disarmed stream keeps stock behaviour. ch =
+                         * frameCount + i is the wire channel (0 = L, 1 = R),
+                         * the same identity the bitrev write below uses. */
+                        samplesOut[frameCount + i] =
+                            (unsigned)csd_ups_slot((unsigned)(frameCount + i),
+                                                   (int)samplesOut[frameCount + i]);
+                    }
+#endif /* CSD_UPS_ASYNC */
 #ifdef CSD_LOOPBACK_TAP
                     /* Tap BEFORE bitrev and before the port write: the value
                      * recorded is the word we intend the wire to carry, which
@@ -634,7 +670,16 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
             if(frameCount == I2S_CHANS_PER_FRAME)
 #endif
             {
+#if defined(CSD_UPS_ASYNC)
+                /* Runtime ratio: one host pair every g_csd_usb_ratio LRCLK
+                 * frames. The ADC side keeps writing every slot into
+                 * samplesIn, so the USB mic sees the last pair of each cycle
+                 * (1-in-8) -- the owner closed the ADC; the loopback tap is
+                 * only armed at ratio 1. */
+                if ((g_csd_usb_ratio - 1u) == audioToUsbRatioCounter)
+#else
                 if ((AUD_TO_USB_RATIO - 1) == audioToUsbRatioCounter)
+#endif
                 {
                     /* Do samples transfer */
                     /* The below looks a bit odd but forces the compiler to inline twice */
