@@ -91,6 +91,28 @@ void ConfigAudioPorts(
             set_pad_delay(p_i2s_adc[i], 4);
         }
     }
+    /* ClearSound: timing alignment for the ADC1 loopback input.
+     *
+     * This port is clocked by clk_audio_bclk, which is derived from the MCLK
+     * PIN (configure_clock_src_divide above), so its sampling instant inherits
+     * the MCLK arrival time. Per xs1.h an input port samples on the clock's
+     * RISING edge by default; the DAC data looped into it is launched by the
+     * same clock block on its FALLING edge, as is BCLK itself. The budget from
+     * launch to sample is therefore half a bit-clock period minus the output
+     * pad delays of the data and clock pins, the 33 ohm series resistors, the
+     * board trace and the rework jumper. At 384 kHz that budget is 20.35 ns
+     * and no compensation runs at all in I2S mode (the block above is TDM
+     * only), so the port samples inside the data transition and words return
+     * rotated by 1-5 bits. set_pad_delay() adds 0..5 processor-clock cycles
+     * (1.667 ns each at the 600 MHz tile clock) of input delay; these two
+     * knobs let the sample point be measured instead of guessed. The bench
+     * sweeps them with the gapless DC test. */
+#ifdef CSD_ADC1_PAD_DELAY
+    set_pad_delay(p_i2s_adc[0], CSD_ADC1_PAD_DELAY);
+#endif
+#ifdef CSD_ADC1_SAMPLE_DELAY
+    set_port_sample_delay(p_i2s_adc[0]);
+#endif
 #endif
 
 #elif (CODEC_MASTER)

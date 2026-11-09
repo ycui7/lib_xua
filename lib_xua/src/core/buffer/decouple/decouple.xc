@@ -923,12 +923,61 @@ void XUA_Buffer_Decouple(chanend c_mix_out
                 unpackState = 0;
 
                 outUnderflow = 1;
-                if(outOverflow)
-                {
-                    /* If we were previously in overflow we wont have marked as ready */
-                    XUD_SetReady_OutPtr(aud_from_host_usb_ep, aud_from_host_fifo_start+4);
-                    outOverflow = 0;
-                }
+
+                /* ===================== CSD FIX 2026-11-09 (decouple OUT arm at stream start) =====================
+                 * WHAT CHANGED
+                 *   Before: the XUD OUT endpoint was re-armed at fifo_start ONLY when outOverflow was set.
+                 *           g_aud_from_host_buffer (the address the buffer() task writes an incoming packet
+                 *           into, and the value later compared as released_buffer) was NEVER reset here.
+                 *   Now:    g_aud_from_host_buffer is reset to fifo_start alongside rdptr/wrptr above, and
+                 *           XUD_SetReady_OutPtr() is called unconditionally; outOverflow is cleared
+                 *           unconditionally because the ring was just emptied by the pointer reset.
+                 *
+                 * WHY (measured, not theorised)
+                 *   The hardware ADC1 loopback showed the leading 125 us of every freshly started USB
+                 *   playback stream arriving as 0x00000000 while the rest of a 1,048,576-frame 32-bit
+                 *   waveform matched bit-for-bit. Missing-frame counts: 5/6/11/12/22/24/48 at
+                 *   44.1/48/88.2/96/176.4/192/384 kHz -- i.e. exactly ONE isochronous OUT packet per USB
+                 *   microframe at each rate, hence rate-independent in TIME (125 us) and rate-dependent in
+                 *   FRAMES. ALSA start-threshold was excluded (a 1024-frame period is 23 ms @44.1k vs
+                 *   2.7 ms @384k, off by 176x); the ES9219Q was excluded because the tap sits on the xCORE's
+                 *   own DAC-data pin, upstream of the codec.
+                 *   Mechanism: the endpoint remained armed at the slot where the PREVIOUS stream's last
+                 *   re-arm left it (see the steady-state re-arm near "Enter OUT over flow state" below).
+                 *   The commit path only accepts a packet when released_buffer == g_aud_from_host_wrptr.
+                 *   After the pointer reset above, wrptr == fifo_start but released_buffer still pointed at
+                 *   the stale slot, so packet 1 of the new stream fell through the "Ignore bad small
+                 *   packets" condition and was discarded SILENTLY; packet 2 onward re-armed correctly and
+                 *   was bit-perfect forever.
+                 *   The zeros themselves are not produced here -- they are lib_xua's designed prefill
+                 *   behaviour (outUnderflow echoes underflowWord, 0 in PCM). Do NOT touch the prefill path:
+                 *   commit e90de7f0 already reverted an attempt to zero it and cost ~19 dB.
+                 *
+                 * HOW TO REVERT (restore stock lib_xua behaviour exactly)
+                 *   Delete the SET_SHARED_GLOBAL(g_aud_from_host_buffer, ...) line below and replace the
+                 *   unconditional XUD_SetReady_OutPtr()/outOverflow = 0 pair with the original guarded form:
+                 *
+                 *       if(outOverflow)
+                 *       {
+                 *           /* If we were previously in overflow we wont have marked as ready *\/
+                 *           XUD_SetReady_OutPtr(aud_from_host_usb_ep, aud_from_host_fifo_start+4);
+                 *           outOverflow = 0;
+                 *       }
+                 *
+                 *   i.e. revert to: arm only under outOverflow, and leave g_aud_from_host_buffer alone.
+                 *
+                 * OBSERVABILITY (if this ever needs to be re-proven, add at the "Ignore bad small packets"
+                 *   condition further down this task): count and print the case where the flag fired but
+                 *   released_buffer != aud_from_host_wrptr. Before this fix that branch consumed exactly one
+                 *   packet per stream start with no counter and no print.
+                 *
+                 * KNOWN RESIDUAL RACE: buffer() runs on another core, so a packet already in flight into the
+                 *   old armed slot at the instant of this reset can still be lost. It is bounded at one
+                 *   packet and is the same window this fix removes for the steady case.
+                 * ================================================================================================= */
+                SET_SHARED_GLOBAL(g_aud_from_host_buffer, aud_from_host_fifo_start);
+                XUD_SetReady_OutPtr(aud_from_host_usb_ep, aud_from_host_fifo_start+4);
+                outOverflow = 0;
 #endif
 
 #ifdef NATIVE_DSD
