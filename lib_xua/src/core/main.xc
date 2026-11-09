@@ -76,7 +76,7 @@ on tile[XUA_AUDIO_IO_TILE_NUM] : buffered out port:32 p_i2s_dac[I2S_WIRES_DAC] =
 
 #if I2S_WIRES_ADC > 0
 on tile[XUA_AUDIO_IO_TILE_NUM] : buffered in port:32 p_i2s_adc[I2S_WIRES_ADC] =
-                {PORT_I2S_ADC0,
+                {PORT_I2S_ADC1_LB,
 #endif
 #if I2S_WIRES_ADC > 1
                 PORT_I2S_ADC1,
