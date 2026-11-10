@@ -51,6 +51,39 @@ extern unsigned char mixSel[XUA_MAX_MIX_COUNT][XUA_MIX_INPUTS];
 
 /* Global var for current frequency, set to default freq */
 unsigned int g_curSamFreq = DEFAULT_FREQ;
+
+/* ---- 2026-11-09: host clock-request recorder (read-only observability) -----
+ * WHY: the device exposes ONE UAC2 CLOCK_SOURCE (bClockID 41) shared by the
+ * playback and capture streams, and g_curSamFreq above is its single value.
+ * The hardware contract (owner directive) pins the I2S wire, and therefore the
+ * ADC1 mic, at MCLK/128 = 384 kHz whenever the upsampler is enabled, so an
+ * ALSA host that opens playback at 192 kHz and capture at 384 kHz has two
+ * rates for one variable. Observed consequence: during a 192 kHz playback
+ * stream every AudioHwConfig carried samFreq=384000, csd_ups_arm() computed
+ * csd_ups_expected_out_hz(384000)=0, the interpolator stayed disarmed and the
+ * wire consumed one host frame per LRCLK instead of per two (mic tone at 2x,
+ * 77.6% empty slots). With the capture stream closed the same build runs at
+ * ratio=2, armed, in=192000/out=384000 -- so the question is what the host
+ * actually put on the control pipe, in order. This ring answers it.
+ * CHANGE: recording only. No control decision is altered; every path returns
+ * exactly what it returned before.
+ * REVERT: delete these statics, the four recorder calls below, and the
+ * xua_csd_clk_* accessors plus their SCPI row. */
+#define CSD_CLK_HIST 8
+static unsigned g_clk_reqs, g_clk_accepted, g_clk_rejected;
+static unsigned g_clk_hist_hz[CSD_CLK_HIST];
+static unsigned g_clk_hist_ok[CSD_CLK_HIST];
+static void csd_clk_note(unsigned hz, unsigned ok)
+{
+    unsigned i = (g_clk_reqs + g_clk_rejected) % CSD_CLK_HIST;
+    g_clk_hist_hz[i] = hz;
+    g_clk_hist_ok[i] = ok;
+}
+unsigned xua_csd_clk_reqs(void)      { return g_clk_reqs; }
+unsigned xua_csd_clk_accepted(void)  { return g_clk_accepted; }
+unsigned xua_csd_clk_rejected(void)  { return g_clk_rejected; }
+unsigned xua_csd_clk_hist_hz(unsigned i) { return (i < CSD_CLK_HIST) ? g_clk_hist_hz[i] : 0u; }
+unsigned xua_csd_clk_hist_ok(unsigned i) { return (i < CSD_CLK_HIST) ? g_clk_hist_ok[i] : 0u; }
 #if 0
 unsigned int g_curSamFreq48000Family = DEFAULT_FREQ % 48000 == 0;
 
@@ -1167,6 +1200,8 @@ int AudioEndpointRequests_1(XUD_ep ep0_out, XUD_ep ep0_in, USB_SetupPacket_t &sp
                         /* Recontruct sample-freq */
                         int newSampleRate = (buffer, unsigned char[])[0] | ((buffer, unsigned char[])[1] << 8) | ((buffer, unsigned char[])[2] << 16);
 
+                        csd_clk_note((unsigned) newSampleRate, 2u);  /* seen (may be a no-op) */
+                        g_clk_reqs++;
                         if(newSampleRate != g_curSamFreq)
                         {
                             /* Windows Audio Class driver has a nice habbit of sending invalid SF's (e.g. 48001Hz)
@@ -1176,6 +1211,8 @@ int AudioEndpointRequests_1(XUD_ep ep0_out, XUD_ep ep0_in, USB_SetupPacket_t &sp
 
                             if(curSamFreq48000Family || curSamFreq44100Family)
                             {
+                                g_clk_accepted++;
+                                csd_clk_note((unsigned) newSampleRate, 1u);
                                 g_curSamFreq = newSampleRate;
 
                                 /* Instruct audio thread to change sample freq */
@@ -1187,6 +1224,11 @@ int AudioEndpointRequests_1(XUD_ep ep0_out, XUD_ep ep0_in, USB_SetupPacket_t &sp
 
                                 /* Allow time for the change - feedback to stabilise */
                                 FeedbackStabilityDelay();
+                            }
+                            else
+                            {
+                                g_clk_rejected++;          /* failed the family check */
+                                csd_clk_note((unsigned) newSampleRate, 0u);
                             }
                         }
                         return XUD_SetBuffer(ep0_in, (buffer, unsigned char[]), 0);
