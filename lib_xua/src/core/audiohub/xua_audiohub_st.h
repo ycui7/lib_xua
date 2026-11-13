@@ -56,7 +56,21 @@ static inline void CompleteSampleTransferUsbChans(chanend ?c_aud, const int read
         inuint(c_aud);
 #endif
         /* Run user code */
+#ifdef CSD_XFER_TIMING
+        { /* 2026-11-12: inline UBM cost probe (xt_out/xt_out_n, otherwise
+           * dead INFO fields, 10 ns ticks). Separates 'UBM work' from
+           * 'partner wake' in the 7.9 us transfer frame. REVERT with
+           * CSD_XFER_TIMING. */
+          timer tubm; unsigned b0, b1;
+          tubm :> b0;
+          UserBufferManagement(samplesOut, samplesIn[readBuffNo]);
+          tubm :> b1;
+          unsigned du = b1 - b0;
+          g_csd_xt_out += du; g_csd_xt_out_n++;
+        }
+#else
         UserBufferManagement(samplesOut, samplesIn[readBuffNo]);
+#endif
 
 #if NUM_USB_CHAN_IN > 0
 #pragma loop unroll
@@ -93,6 +107,51 @@ static inline void CheckForCmdNoUsbChans(chanend ?c_aud, const int readBuffNo, u
 }
 
 
+
+#ifdef CSD_UPS_ASYNC
+/* Two-phase exchange, receive half (2026-11-12). WHY: in master mode
+ * (CODEC_MASTER==0) HandleSampleClock is compiled out — the loop's ONLY
+ * synchronisation against the decouple node is the token exchange, and the
+ * IN half (2 inuint) waits on the decouple RESPONSE, whose wake latency
+ * (~1.85 us measured) lands mid-frame and drags the whole loop to 4.5 us
+ * when the exchange runs every frame. Splitting the exchange across two
+ * consecutive transfer frames costs nothing at ratio>1 (both frames carry
+ * the same pair) and removes one response wait from each frame. The two
+ * inuint are adjacent on the wire, so receiving them in the frame AFTER
+ * the outuints is protocol-identical: decouple sends its reply as one
+ * burst and the channel buffers it. Order discipline: StartPair OUT half,
+ * then the reply of the PREVIOUS pair (ReceivePrevReply), then StartPair
+ * the next. REVERT: delete this function and the CSD_UPS_ASYNC call sites. */
+static inline void ReceivePrevReply(chanend ?c_aud, const int readBuffNo)
+{
+    if(XUA_USB_EN)
+    {
+        for(int i = 0; i < NUM_USB_CHAN_OUT; i++)
+        {
+            int tmp = inuint(c_aud);
+            samplesOut[i] = tmp;
+        }
+        /* 2026-11-12: UBM moved OUT of this exchange (see the CSD_UPS_ASYNC
+         * block at the transfer-frame tail in xua_audiohub.xc). WHY: the
+         * timed witnesses prove the channel ops cost ~44 ns total (in 19 ns,
+         * out 25 ns, link hidden by the prefetch) while the transfer frame
+         * costs 7.9 us -- the difference is the per-exchange CROSS-FILE
+         * UBM call (hot-path rule: a cross-file call per wire-rate frame
+         * blows the budget; measured again here). The channel protocol only
+         * requires the mic words to be sent after the reply pair; those
+         * words are staged by the preceding UBM call (one frame stale by
+         * design now, like the OUT path already is). Order at the transfer
+         * frame becomes: reply in, mic out (staged), UBM refill for next
+         * frame, start next token. REVERT: restore this call, delete the
+         * block at the call site. */
+#ifdef CSD_UPS_ASYNC
+        /* no UBM here at ratio>1 -- see transfer-frame tail */
+#else
+        UserBufferManagement(samplesOut, samplesIn[readBuffNo]);
+#endif
+    }
+}
+#endif
 
 #ifdef CSD_XFER_TIMING
 /* Timed clone of CompleteSampleTransferUsbChans (see that function for the

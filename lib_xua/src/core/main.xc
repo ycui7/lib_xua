@@ -25,6 +25,8 @@
 
 #include "uac_hwresources.h"
 
+void csd_ps_thread(void); /* REVERT(dp161): remove with csd_ps_thread.xc */
+
 #if (XUA_SPDIF_RX_EN || XUA_SPDIF_TX_EN)
 #include "spdif.h"                     /* From lib_spdif */
 #endif
@@ -386,6 +388,16 @@ void usb_audio_io(chanend ?c_aud_in,
                 , c_pdm_pcm
 #endif
             );
+        }
+
+        /* REVERT(dp161 2026-11-13): remove this branch + csd_ps_thread.xc +
+         * csd_ps_ring.c + extern. dp161: wire-word producer at wire cadence,
+         * own tile core (the AudioHub-internal-par placement stalled
+         * mic-stream enumeration). NOTE(dp167): must stay UNCONDITIONAL —
+         * EXTRA_BUILD_FLAGS provably never reach compilation. */
+        {
+            thread_speed();
+            csd_ps_thread();
         }
 
 #if (XUA_SPDIF_RX_EN || XUA_ADAT_RX_EN)

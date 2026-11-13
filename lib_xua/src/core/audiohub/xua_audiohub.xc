@@ -113,7 +113,18 @@ int csd_ups_slot(unsigned ch, int w);
  * the rate-change path hands the ratio over without a channel. 1 = stock
  * behaviour (host pair every LRCLK frame); 2/4/8 only while the CSD
  * upsampler is armed. Anything else falls back to 1. */
-static unsigned g_csd_usb_ratio = 1;
+/* REVERT(dp168): was `static` — the app-side arm (csd_ups_block.c) wrote a
+ * DIFFERENT same-named global; the lib copy stayed 1 forever, which is why
+ * the runtime ratio never engaged. Non-static now links the two sides.
+ * (dp167: EXTRA_BUILD_FLAGS is a phantom — the CSD_UPS_ASYNC/CSD_ADC_DIAG
+ * defines below are the only way anything gated ever compiles.) */
+unsigned g_csd_usb_ratio = 1;
+#ifndef CSD_UPS_ASYNC
+#define CSD_UPS_ASYNC 1
+#endif
+#ifndef CSD_ADC_DIAG
+#define CSD_ADC_DIAG 1
+#endif
 #define CSD_MIC_PHASE_AUTO_X 0xFFFFFFFFu   /* must equal csd_upsample_hook.h */
 /* 2026-11-10 PORT DECIMATOR (owner design; replaces the 11-09 latch decimator,
  * which is deleted).
@@ -184,6 +195,26 @@ static unsigned g_csd_dec_pub   = 0u;  /* witness: words presented to downstream
  * two #ifdef CSD_ADC_DIAG blocks at the fill sites, and the six tail fields in
  * DIAG:UPSAMPLing:INFO?. Cost when the flag is undefined: nothing -- the
  * counters stay 0 and the fields read 0. */
+/* REVERT(dp168 2026-11-13): the dp167 lesson — EXTRA_BUILD_FLAGS is a
+ * phantom (never consumed by the build; verified twice via symbol table).
+ * Everything armed-loop related is therefore UNCONDITIONAL here and is
+ * runtime-gated on g_csd_usb_ratio. Stock single-rate behaviour must be
+ * byte-identical (ratio 1 => same branch selections as the stock lines). */
+unsigned g_csd_c_pass = 0, g_csd_c_gateblk = 0, g_csd_c_gtrue = 0,
+         g_csd_c_gfalse = 0, g_csd_c_tail = 0, g_csd_c_reentry = 0;
+unsigned g_csd_f_armed_n = 0, g_csd_f_wait_n = 0, g_csd_f_skip_n = 0,
+         g_csd_f_wt = 0;
+/* REVERT(dp168): pacing witness globals re-added after the dp168 recovery
+ * (csd_diag_scpi externs them; values: wire_* mirror the floor latch, the
+ * it_/fl_ split-timing family stays 0 — CSD_IT_SPLIT never existed outside
+ * the phantom flags). */
+unsigned g_csd_wire_ticks_val = 0, g_csd_wire_rem_val = 0;
+unsigned g_csd_it_adc_ticks = 0, g_csd_it_pre_ticks = 0, g_csd_fl_ticks = 0;
+unsigned g_csd_it_n = 0, g_csd_fl_wait = 0;
+extern unsigned csd_ups_diag_out_hz(void);
+extern unsigned csd_ups_get_want(void);
+void csd_ps_thread(void);            /* csd_ps_thread.xc (REVERT dp161) */
+int  csd_ps_claim(unsigned ch, int w); /* csd_ps_ring.c   (REVERT dp161) */
 unsigned g_csd_adc_cnt[2] = {0, 0};
 unsigned g_csd_adc_or[2] = {0, 0};
 /* 2026-11-09 divider witness (assistant), for the four-way config question
@@ -537,6 +568,10 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
         return command;
     }
 
+    /* REVERT(dp168): wire-cadence floor state (see wait at the frame tail) */
+    timer wireTmr; unsigned wireNext = 0, wireTicks = 0, wireRem = 0, wireAcc = 0;
+    g_csd_c_reentry++; /* REVERT(dp168) */
+
     /* Main Audio I/O loop */
     while (1)
     {
@@ -574,7 +609,11 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                 /* Input previous L sample into L in buffer */
                 index = 0;
                 /* First input (i.e. frameCount == 0) we read last ADC channel of previous frame.. */
-                unsigned buffIndex = (frameCount > 1) ? !readBuffNo : readBuffNo;
+                /* REVERT(dp159 2026-11-13): frameCount never exceeds 1
+                 * (I2S_CHANS_PER_FRAME==2), so the stock ternary always
+                 * staged into the buffer being uploaded NOW; the next-up
+                 * buffer kept boot zeros. Publish to the staging buffer. */
+                unsigned buffIndex = !readBuffNo;
 
 #pragma loop unroll
                 /* First time around we get channel 7 of TDM8 */
@@ -678,7 +717,7 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                          * frameCount + i is the wire channel (0 = L, 1 = R),
                          * the same identity the bitrev write below uses. */
                         samplesOut[frameCount + i] =
-                            (unsigned)csd_ups_slot((unsigned)(frameCount + i),
+                            (unsigned)csd_ps_claim((unsigned)(frameCount + i),
                                                    (int)samplesOut[frameCount + i]);
                     }
 #endif /* CSD_UPS_ASYNC */
@@ -848,7 +887,7 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                          * csd_ups_slot returns w untouched when the path is
                          * not active, so a disarmed stream is stock. */
                         samplesOut[frameCount + i] =
-                            (unsigned)csd_ups_slot((unsigned)(frameCount + i),
+                            (unsigned)csd_ps_claim((unsigned)(frameCount + i),
                                                    (int)samplesOut[frameCount + i]);
                     }
 #endif /* CSD_UPS_ASYNC */
@@ -1037,6 +1076,46 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                 }
                 /* Reset the framecount because we have outputted all channels in the frame now */
                 frameCount = 0;
+                /* REVERT(dp168 2026-11-13): wire-cadence floor, once per wire
+                 * frame, unconditional, runtime-gated. WHY: armed (ratio>1) the
+                 * loop had no per-frame wait — the exchange moved to every
+                 * ratio-th frame — and free-ran at the mixer round-trip limit
+                 * (measured 221-245k vs 384k wire), warping the mic stream.
+                 * XS1 timer floor: an expired deadline costs nothing, so at
+                 * ratio 1 this is a no-op load/store path, stock-preserving.
+                 * wireSamFreq is the entry-time fabric rate (0 when the loop
+                 * entered un-armed) -> fall back to the live wire rate. */
+                if (g_csd_usb_ratio > 1u)
+                {
+                    if (wireTicks == 0u)
+                    {
+                        unsigned wf = (wireSamFreq != 0u) ? wireSamFreq
+                                                          : csd_ups_diag_out_hz();
+                        if (wf != 0u)
+                        {
+                            wireTicks = XS1_TIMER_HZ / wf;
+                            wireRem   = XS1_TIMER_HZ % wf;
+                            wireTmr :> wireNext;
+                            g_csd_f_armed_n++;
+                            g_csd_wire_ticks_val = wireTicks;
+                            g_csd_wire_rem_val   = wireRem;
+                        }
+                    }
+                    if (wireTicks != 0u)
+                    {
+                        unsigned wsf = (wireSamFreq != 0u) ? wireSamFreq
+                                                           : csd_ups_diag_out_hz();
+                        if (wsf == 0u) { wsf = 1u; }
+                        wireNext += wireTicks;
+                        wireAcc  += wireRem;
+                        if (wireAcc >= wsf) { wireNext++; wireAcc -= wsf; }
+                        { unsigned nw; wireTmr :> nw; g_csd_f_wt = wireTicks;
+                          if ((int)(nw - wireNext) < 0) { g_csd_f_wait_n++; }
+                          else                          { g_csd_f_skip_n++; } }
+                        wireTmr when timerafter(wireNext) :> void;
+                    }
+                }
+                g_csd_c_tail++; /* REVERT(dp168) */
             }
             skip_ts_check = 0;
         }
