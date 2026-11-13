@@ -1,3 +1,13 @@
+/* REVERT(dp168 2026-11-13): MUST be the first lines — these feature macros
+ * were only ever passed via the phantom EXTRA_BUILD_FLAGS and compiled every
+ * CSD async/witness region out (lib AND its headers). Top-of-file, before
+ * xua_audiohub_st.h, is the only place that catches all uses. */
+#ifndef CSD_UPS_ASYNC
+#define CSD_UPS_ASYNC 1
+#endif
+#ifndef CSD_ADC_DIAG
+#define CSD_ADC_DIAG 1
+#endif
 // Copyright 2011-2026 XMOS LIMITED.
 // This Software is subject to the terms of the XMOS Public Licence: Version 1.
 /**
@@ -119,12 +129,7 @@ int csd_ups_slot(unsigned ch, int w);
  * (dp167: EXTRA_BUILD_FLAGS is a phantom — the CSD_UPS_ASYNC/CSD_ADC_DIAG
  * defines below are the only way anything gated ever compiles.) */
 unsigned g_csd_usb_ratio = 1;
-#ifndef CSD_UPS_ASYNC
-#define CSD_UPS_ASYNC 1
-#endif
-#ifndef CSD_ADC_DIAG
-#define CSD_ADC_DIAG 1
-#endif
+
 #define CSD_MIC_PHASE_AUTO_X 0xFFFFFFFFu   /* must equal csd_upsample_hook.h */
 /* 2026-11-10 PORT DECIMATOR (owner design; replaces the 11-09 latch decimator,
  * which is deleted).
@@ -211,6 +216,12 @@ unsigned g_csd_f_armed_n = 0, g_csd_f_wait_n = 0, g_csd_f_skip_n = 0,
 unsigned g_csd_wire_ticks_val = 0, g_csd_wire_rem_val = 0;
 unsigned g_csd_it_adc_ticks = 0, g_csd_it_pre_ticks = 0, g_csd_fl_ticks = 0;
 unsigned g_csd_it_n = 0, g_csd_fl_wait = 0;
+/* REVERT(dp168): lib-side witnesses re-added (lost in the dp168 baseline
+ * revert; all unconditional — flags are dead). */
+unsigned g_csd_gate_true = 0, g_csd_gate_false = 0, g_csd_ratio_live = 0;
+unsigned g_csd_tt_ticks = 0, g_csd_tt_n = 0, g_csd_tt_a = 0;
+unsigned g_csd_xfer_tok = 0, g_csd_xfer_else = 0;
+unsigned g_csd_adc_ctr_seen = 0, g_csd_adc_fc_seen = 0;
 extern unsigned csd_ups_diag_out_hz(void);
 extern unsigned csd_ups_get_want(void);
 void csd_ps_thread(void);            /* csd_ps_thread.xc (REVERT dp161) */
@@ -791,6 +802,8 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                     /* Manual IN instruction since compiler generates an extra setc per IN (bug #15256) */
                     unsigned sample;
                     asm volatile("in %0, res[%1]" : "=r"(sample)  : "r"(p_i2s_adc[index]));
+                    g_csd_adc_ctr_seen |= 1u << (audioToUsbRatioCounter & 7u);
+                    g_csd_adc_fc_seen  |= 1u << (frameCount & 7u);
                     sample = bitrev(sample);
                     if(XUA_I2S_N_BITS != 32)
                     {
@@ -947,11 +960,18 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                  *     if ((AUD_TO_USB_RATIO - 1) == audioToUsbRatioCounter)
                  * or, to keep the runtime ratio without the clamp property,
                  *     if (audioToUsbRatioCounter == (g_csd_usb_ratio - 1u))    */
-                if (audioToUsbRatioCounter >= (g_csd_usb_ratio - 1u))
+                /* REVERT(dp169): the counter advances once per PASS
+                 * (half-frame): one exchange per ratio WIRE frames = every
+                 * 2*ratio passes. The dp168 gate counted passes as frames
+                 * and exchanged at wire rate (277k/s instead of host-rate
+                 * 96k pairs/s). */
+                if (audioToUsbRatioCounter >= ((g_csd_usb_ratio * 2u) - 1u))
 #else
                 if ((AUD_TO_USB_RATIO - 1) == audioToUsbRatioCounter)
 #endif
                 {
+                    g_csd_gate_true++; g_csd_ratio_live = g_csd_usb_ratio;
+                    { timer ttt; ttt :> g_csd_tt_a; }
                     /* Do samples transfer */
 #ifdef CSD_UPS_ASYNC
                     /* PORT DECIMATOR per-cycle re-arm. The transfer boundary is
@@ -982,6 +1002,7 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                     {
                         g_csd_prefetch = 0;
                         g_csd_prefetch_hits++;
+                        g_csd_xfer_tok++; /* REVERT(dp168) */
                         unsigned pcmd = XUA_AUDCTL_NO_COMMAND;
 #ifdef CSD_XFER_TIMING
                         CompleteSampleTransferTimed(c_aud, readBuffNo, pcmd, 1);
@@ -999,6 +1020,7 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                     {
                     /* The below looks a bit odd but forces the compiler to inline twice */
                     unsigned command;
+                    g_csd_xfer_else++; /* REVERT(dp168) */
 #ifdef CSD_XFER_TIMING
                     /* HOW LONG DOES THE USB EXCHANGE STALL THE BIT-TIMED LOOP?
                      * The loop is proven clock-locked when the exchange is
@@ -1073,6 +1095,7 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                 else
                 {
                     ++audioToUsbRatioCounter;
+                    g_csd_gate_false++;
                 }
                 /* Reset the framecount because we have outputted all channels in the frame now */
                 frameCount = 0;
@@ -1089,12 +1112,16 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                 {
                     if (wireTicks == 0u)
                     {
-                        unsigned wf = (wireSamFreq != 0u) ? wireSamFreq
-                                                          : csd_ups_diag_out_hz();
+                        unsigned wf = csd_ups_diag_out_hz();
                         if (wf != 0u)
                         {
-                            wireTicks = XS1_TIMER_HZ / wf;
-                            wireRem   = XS1_TIMER_HZ % wf;
+                            /* REVERT(dp169): the floor sits on the PASS
+                             * path — one pass = one half-frame (one ADC
+                             * read side + one LRCLK toggle) — so the unit
+                             * is HALF a wire frame: stride = T/2 exactly
+                             * (50M/wf ticks, remainder carried on wf). */
+                            wireTicks = 50000000u / wf;
+                            wireRem   = 50000000u % wf;
                             wireTmr :> wireNext;
                             g_csd_f_armed_n++;
                             g_csd_wire_ticks_val = wireTicks;
@@ -1103,18 +1130,30 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                     }
                     if (wireTicks != 0u)
                     {
-                        unsigned wsf = (wireSamFreq != 0u) ? wireSamFreq
-                                                           : csd_ups_diag_out_hz();
+                        unsigned wsf = csd_ups_diag_out_hz();
                         if (wsf == 0u) { wsf = 1u; }
                         wireNext += wireTicks;
                         wireAcc  += wireRem;
                         if (wireAcc >= wsf) { wireNext++; wireAcc -= wsf; }
                         { unsigned nw; wireTmr :> nw; g_csd_f_wt = wireTicks;
                           if ((int)(nw - wireNext) < 0) { g_csd_f_wait_n++; }
-                          else                          { g_csd_f_skip_n++; } }
+                          else
+                          {
+                              /* REVERT(dp169): deadline expired — the fixed
+                               * stride from a one-time latch falls behind the
+                               * timer permanently after any early stall, and
+                               * the floor degrades to a no-op (measured
+                               * f_skip == 100%, loop free at 554k). Re-anchor
+                               * to now, then wait the stride from here: the
+                               * floor becomes a true per-frame clock. */
+                              g_csd_f_skip_n++;
+                              wireNext = nw + wireTicks;
+                          } }
                         wireTmr when timerafter(wireNext) :> void;
                     }
                 }
+                { timer ttt; unsigned z; ttt :> z;
+                  g_csd_tt_ticks += z - g_csd_tt_a; g_csd_tt_n++; }
                 g_csd_c_tail++; /* REVERT(dp168) */
             }
             skip_ts_check = 0;
