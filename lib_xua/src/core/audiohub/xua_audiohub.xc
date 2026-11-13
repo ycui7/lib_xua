@@ -226,6 +226,15 @@ extern unsigned csd_ups_diag_out_hz(void);
 extern unsigned csd_ups_get_want(void);
 void csd_ps_thread(void);            /* csd_ps_thread.xc (REVERT dp161) */
 int  csd_ps_claim(unsigned ch, int w); /* csd_ps_ring.c   (REVERT dp161) */
+/* REVERT(dp171): per-iteration span at the floor site (ticks, 10ns). */
+unsigned g_csd_span_min = 0xFFFFFFFFu, g_csd_span_max = 0, g_csd_span_last = 0;
+unsigned g_csd_floor_n = 0, g_csd_f_dmax = 0;  /* REVERT(dp172) */
+unsigned g_csd_claim_pace_n = 0;                           /* REVERT(dp177) */
+unsigned g_csd_claim_wnext = 0, g_csd_claim_now = 0, g_csd_claim_stp = 0; /* REVERT(dp177) */
+unsigned g_csd_f_add_n = 0, g_csd_f_wnext = 0, g_csd_f_now2 = 0;
+unsigned g_csd_f_wnext2 = 0;   /* REVERT(dp177) */
+unsigned g_csd_dn_min = 0xFFFFFFFFu, g_csd_dn_max = 0;   /* REVERT(dp174) */
+unsigned g_csd_resync_n = 0;
 unsigned g_csd_adc_cnt[2] = {0, 0};
 unsigned g_csd_adc_or[2] = {0, 0};
 /* 2026-11-09 divider witness (assistant), for the four-way config question
@@ -581,6 +590,12 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
 
     /* REVERT(dp168): wire-cadence floor state (see wait at the frame tail) */
     timer wireTmr; unsigned wireNext = 0, wireTicks = 0, wireRem = 0, wireAcc = 0;
+    /* REVERT(dp177): per-claim wire pacer — the exchange bursts multiple
+     * frames per outer iteration, so the outer floor cannot pace claims:
+     * measured claims 554k/s vs floor 443k/s vs wire 384k/s; mic_stale
+     * 554k/s = every sample stale. Same wireTmr: both waits are
+     * sequential on this single thread. */
+    unsigned claimNext = 0, claimStep = 0;
     g_csd_c_reentry++; /* REVERT(dp168) */
 
     /* Main Audio I/O loop */
@@ -602,6 +617,78 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
         /* Note we always expect syncError to be 0 when we are master */
         while(!syncError)
         {
+            /* REVERT(dp172): THE wire schedule — top of loop, once per
+             * iteration, before any work. Prior floors sat at the frame
+             * tail: the exchange overshoot then always re-expired the next
+             * deadline before it could be observed (f_wait stayed 0 across
+             * dp166-171). Hard wait-first form; deep-stall resync only. */
+            if (g_csd_usb_ratio > 1u)
+            {
+                if (wireTicks == 0u)
+                {
+                    unsigned wf = csd_ups_diag_out_hz();
+                    /* REVERT(dp172): the out-rate lags the ratio hand-over —
+                     * the first armed iterations used to read 0 and latch
+                     * wireTicks = 100M/0 = 0xFFFFFFFF (witnessed: span_min
+                     * 0xFFFFFFFF). A bogus stride is unfulfillable: every
+                     * iteration blocks on a deadline 429 s away while the
+                     * ports ring-buffer their way past it. Only accept a
+                     * plausible wire rate. */
+                    if (wf >= 44100u && wf <= 768000u)
+                    {
+                        wireTicks = XS1_TIMER_HZ / wf;
+                        wireRem   = XS1_TIMER_HZ % wf;
+                        wireTmr :> wireNext;
+                        g_csd_f_armed_n++;
+                        g_csd_wire_ticks_val = wireTicks;
+                    }
+                }
+                if (wireTicks >= 1000000u) { wireTicks = 0u; }  /* bad latch */
+                if (wireTicks != 0u)
+                {
+                    /* REVERT(dp176): HARD pacer. The dp172 wait-first form
+                     * only waits when now < wireNext; the loop always
+                     * arrived LATE (dn>=0 skip every pass, f_wait 0), so
+                     * wireNext trailed and the loop free-ran at 443-554k
+                     * it/s against a 384k wire. Wait UNCONDITIONALLY on the
+                     * accumulator; the wait is a no-op only when genuinely
+                     * behind. Deep-stall resync keeps catch-up bounded. */
+                    g_csd_floor_n++;
+                    unsigned t0; wireTmr :> t0;
+                    { int dn = (int)(t0 - wireNext);
+                      if ((unsigned)(dn + (int)0x80000000) < g_csd_dn_min) g_csd_dn_min = (unsigned)(dn + (int)0x80000000);
+                      if ((unsigned)(dn + (int)0x80000000) > g_csd_dn_max) g_csd_dn_max = (unsigned)(dn + (int)0x80000000);
+                      if (dn > (int)g_csd_f_dmax) g_csd_f_dmax = (unsigned)dn; }
+                    /* REVERT(dp178): wait-then-anchor. PACE? proved the
+                     * pure accumulator never catches up: the floor blocked
+                     * every iteration yet advanced only 180 t/step (the
+                     * loop's real cost) — timerafter() no-ops once the
+                     * deadline is past, so the 80 t/iter debt survived
+                     * forever. Anchor to the OBSERVED completion time. */
+                    if ((int)(t0 - wireNext) > (int)(10u * wireTicks))
+                    { g_csd_resync_n++; g_csd_f_skip_n++; wireNext = t0; }
+                    else if ((int)(t0 - wireNext) < 0)
+                    {   g_csd_f_wait_n++;
+                        wireTmr when timerafter(wireNext) :> void;
+                        unsigned t1; wireTmr :> t1;
+                        { unsigned sp = t1 - t0; g_csd_span_last = t1;
+                          if (sp < g_csd_span_min) g_csd_span_min = sp;
+                          if (sp > g_csd_span_max) g_csd_span_max = sp; }
+                        wireNext = t1;   /* dp178: anchor to observed */
+                    }
+                    else { g_csd_f_skip_n++; wireNext = t0; }
+                    {   unsigned wf2 = csd_ups_diag_out_hz();
+                        if (wf2 >= 44100u && wf2 <= 768000u)
+                        { wireAcc += wireRem;
+                          if (wireAcc >= wf2) { wireNext++; wireAcc -= wf2; } } }
+                    g_csd_wire_ticks_val = wireTicks;   /* REVERT(dp177): live */
+                    g_csd_f_wnext2 = wireNext;          /* REVERT(dp177) */
+                    wireNext += wireTicks;
+                    g_csd_f_add_n++;
+                    g_csd_f_wnext = wireNext; g_csd_f_now2 = t0;
+                    g_csd_f_wt = wireTicks;
+                }
+            }
 #if (DSD_CHANS_DAC != 0) && (NUM_USB_CHAN_OUT > 0)
             if(dsdMode == DSD_MODE_NATIVE)
                 DoDsdNative(samplesOut, dsdSample_l, dsdSample_r, divide);
@@ -728,7 +815,7 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                          * frameCount + i is the wire channel (0 = L, 1 = R),
                          * the same identity the bitrev write below uses. */
                         samplesOut[frameCount + i] =
-                            (unsigned)csd_ps_claim((unsigned)(frameCount + i),
+                            (unsigned)csd_ups_slot((unsigned)(frameCount + i),   /* REVERT(dp179): direct pop restored — the dp161 producer/claim-ring never achieved wire lock; direct pop is the dp157 bit-exact-certified architecture */
                                                    (int)samplesOut[frameCount + i]);
                     }
 #endif /* CSD_UPS_ASYNC */
@@ -900,7 +987,7 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                          * csd_ups_slot returns w untouched when the path is
                          * not active, so a disarmed stream is stock. */
                         samplesOut[frameCount + i] =
-                            (unsigned)csd_ps_claim((unsigned)(frameCount + i),
+                            (unsigned)csd_ups_slot((unsigned)(frameCount + i),   /* REVERT(dp179): direct pop restored — the dp161 producer/claim-ring never achieved wire lock; direct pop is the dp157 bit-exact-certified architecture */
                                                    (int)samplesOut[frameCount + i]);
                     }
 #endif /* CSD_UPS_ASYNC */
@@ -965,7 +1052,9 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                  * 2*ratio passes. The dp168 gate counted passes as frames
                  * and exchanged at wire rate (277k/s instead of host-rate
                  * 96k pairs/s). */
-                if (audioToUsbRatioCounter >= ((g_csd_usb_ratio * 2u) - 1u))
+                /* REVERT(dp171): counter ticks once per while-iteration = per WIRE frame;
+                 * one exchange per ratio wire frames -> threshold ratio-1. */
+                if (audioToUsbRatioCounter >= (g_csd_usb_ratio - 1u))
 #else
                 if ((AUD_TO_USB_RATIO - 1) == audioToUsbRatioCounter)
 #endif
@@ -1120,37 +1209,21 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                              * read side + one LRCLK toggle) — so the unit
                              * is HALF a wire frame: stride = T/2 exactly
                              * (50M/wf ticks, remainder carried on wf). */
-                            wireTicks = 50000000u / wf;
-                            wireRem   = 50000000u % wf;
+                            /* REVERT(dp171): one while-iteration = one FULL
+                             * wire frame (measured: lrclk_emit = 2/pass at
+                             * ratio-1, dp170 bench). Stride = full frame;
+                             * the dp169 half-frame units starved the floor
+                             * (130t < machine pass floor ~1700t -> f_skip
+                             * 100% always). */
+                            wireTicks = XS1_TIMER_HZ / wf;
+                            wireRem   = XS1_TIMER_HZ % wf;
                             wireTmr :> wireNext;
                             g_csd_f_armed_n++;
                             g_csd_wire_ticks_val = wireTicks;
                             g_csd_wire_rem_val   = wireRem;
                         }
                     }
-                    if (wireTicks != 0u)
-                    {
-                        unsigned wsf = csd_ups_diag_out_hz();
-                        if (wsf == 0u) { wsf = 1u; }
-                        wireNext += wireTicks;
-                        wireAcc  += wireRem;
-                        if (wireAcc >= wsf) { wireNext++; wireAcc -= wsf; }
-                        { unsigned nw; wireTmr :> nw; g_csd_f_wt = wireTicks;
-                          if ((int)(nw - wireNext) < 0) { g_csd_f_wait_n++; }
-                          else
-                          {
-                              /* REVERT(dp169): deadline expired — the fixed
-                               * stride from a one-time latch falls behind the
-                               * timer permanently after any early stall, and
-                               * the floor degrades to a no-op (measured
-                               * f_skip == 100%, loop free at 554k). Re-anchor
-                               * to now, then wait the stride from here: the
-                               * floor becomes a true per-frame clock. */
-                              g_csd_f_skip_n++;
-                              wireNext = nw + wireTicks;
-                          } }
-                        wireTmr when timerafter(wireNext) :> void;
-                    }
+
                 }
                 { timer ttt; unsigned z; ttt :> z;
                   g_csd_tt_ticks += z - g_csd_tt_a; g_csd_tt_n++; }
