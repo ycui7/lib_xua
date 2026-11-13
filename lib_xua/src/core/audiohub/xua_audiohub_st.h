@@ -3,6 +3,35 @@
 
 #include "xua_commands.h"
 
+#ifdef CSD_UPS_ASYNC
+/* REVERT(dp200-wire-diet): returns 1 when the exchange DEFERS UBM to the
+ * producer core (armed ratio>1 + ECHO 2 -- the shipping armed loopback
+ * mode, where UBM writes no mic slots; the port decimator publishes the
+ * ADC words directly). Publishes a copy of the host pair on the seqlock
+ * consumed by csd_ub_consume_if_new() (csd_ps_ring.c). The wire's own
+ * samplesOut is re-used by the mailbox pop, hence the copy. All ops
+ * ldw/stw: the producer is a separate tile core (main.xc dp167 note),
+ * cross-thread, and the compiler must not hoist any of it. */
+extern unsigned g_csd_usb_ratio;
+extern unsigned g_csd_ups_echo_mode;
+extern unsigned g_csd_ub_seq;
+extern int      g_csd_ub_pair[2];
+static inline unsigned csd_ub_defer_handoff(const unsigned samplesOut[])
+{
+    if (g_csd_usb_ratio <= 1u || g_csd_ups_echo_mode != 2u) { return 0; }
+    unsigned sq;
+    asm volatile("ldw %0, dp[g_csd_ub_seq]" : "=r"(sq));
+    sq++;
+    asm volatile("stw %0, dp[g_csd_ub_seq]" :: "r"(sq));   /* odd: window */
+    unsigned a = samplesOut[0], b = samplesOut[1];
+    asm volatile("stw %0, dp[g_csd_ub_pair]"   :: "r"(a));
+    asm volatile("stw %0, dp[g_csd_ub_pair+4]" :: "r"(b));
+    sq++;
+    asm volatile("stw %0, dp[g_csd_ub_seq]" :: "r"(sq));   /* even: done */
+    return 1;
+}
+#endif
+
 static inline void StartSampleTransfer(chanend ?c_aud, const unsigned underflowWord)
 {
     if(XUA_USB_EN)
@@ -55,6 +84,8 @@ static inline void CompleteSampleTransferUsbChans(chanend ?c_aud, const int read
 #else
         inuint(c_aud);
 #endif
+        const unsigned pmask_x = g_csd_probe_mask; /* REVERT(dp202): one load
+            * per exchange (see wire-loop hoist note in xua_audiohub.xc) */
         /* Run user code */
 #ifdef CSD_XFER_TIMING
         { /* 2026-11-12: inline UBM cost probe (xt_out/xt_out_n, otherwise
@@ -69,6 +100,10 @@ static inline void CompleteSampleTransferUsbChans(chanend ?c_aud, const int read
           g_csd_xt_out += du; g_csd_xt_out_n++;
         }
 #else
+#ifdef CSD_UPS_ASYNC
+        /* REVERT(dp200-wire-diet): armed+ECHO2 defers UBM to the producer. */
+        if (!csd_ub_defer_handoff(samplesOut))
+#endif
         UserBufferManagement(samplesOut, samplesIn[readBuffNo]);
 #endif
 
@@ -76,8 +111,19 @@ static inline void CompleteSampleTransferUsbChans(chanend ?c_aud, const int read
 #pragma loop unroll
         for(int i = 0; i < NUM_USB_CHAN_IN; i++)
         {
-            outuint(c_aud, samplesIn[readBuffNo][i]);
+            /* REVERT(dp181): ship-site zero-birth witness (see decl in
+             * xua_audiohub.xc; this header is included by that TU only).
+             * REVERT(dp186): counter stores gated behind probe mask bit5. */
+            unsigned csd_sw = samplesIn[readBuffNo][i];
+            if ((pmask_x & 32u) && (unsigned)i < 2u) {  /* REVERT(dp202): mask
+                * snapshot hoisted above the exchange -- see wire-loop note */
+                g_csd_w_shipn[i]++;
+                if (csd_sw == 0u) g_csd_w_shipz[i]++;
+            }
+            outuint(c_aud, csd_sw);
         }
+        g_csd_w_exch++;  /* one stw/exchange: kept unconditional -- it is the
+                          * lean-wire-rate oracle that caught the dp202 tax */
 #endif
     }
 
@@ -208,6 +254,11 @@ static inline void CompleteSampleTransferTimed(chanend ?c_aud, const int readBuf
      * and the mic decimator. It was outside every timed region -- timed now.
      * REVERT with the rest of CSD_XFER_TIMING. */
     t0 :> a;
+#ifdef CSD_UPS_ASYNC
+    /* REVERT(dp200-wire-diet): armed+ECHO2 defers UBM to the producer
+     * (xt_ubm then reads ~0 on the armed leg -- expected). */
+    if (!csd_ub_defer_handoff(samplesOut))
+#endif
     UserBufferManagement(samplesOut, samplesIn[readBuffNo]);
     t0 :> b; g_csd_xt_ubm += (b - a); g_csd_xt_ubm_n++;
     if ((b - a) > g_csd_xt_ubm_max) g_csd_xt_ubm_max = (b - a);

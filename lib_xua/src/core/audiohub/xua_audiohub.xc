@@ -6,7 +6,11 @@
 #define CSD_UPS_ASYNC 1
 #endif
 #ifndef CSD_ADC_DIAG
-#define CSD_ADC_DIAG 1
+/* REVERT(dp185): disabled — the adc_cnt/or/sum per-word witnesses are
+ * superseded by g_csd_w_portn/portz (dp181) and cost ~10 t/frame on the
+ * armed wire loop, which dp184 measurement showed has zero margin.
+ * adc_* INFO fields read boot values while this is 0. */
+#define CSD_ADC_DIAG 0
 #endif
 // Copyright 2011-2026 XMOS LIMITED.
 // This Software is subject to the terms of the XMOS Public Licence: Version 1.
@@ -226,6 +230,19 @@ extern unsigned csd_ups_diag_out_hz(void);
 extern unsigned csd_ups_get_want(void);
 void csd_ps_thread(void);            /* csd_ps_thread.xc (REVERT dp161) */
 int  csd_ps_claim(unsigned ch, int w); /* csd_ps_ring.c   (REVERT dp161) */
+/* REVERT(dp187): the R-half claim reads these directly (see R site). */
+extern unsigned g_csd_ps_active;
+extern int      g_csd_ps_latch1;
+/* REVERT(dp189): mailbox (csd_ps_ring.c). The L site seqlock-reads these;
+ * asm ldw/stw names them by symbol, which needs file-global linkage. */
+extern unsigned g_csd_ps_mbox_seq;
+extern unsigned g_csd_ps_starve;
+extern unsigned g_csd_ps_fresh;      /* REVERT(dp196): fresh clock */
+/* REVERT(dp196): attribution witnesses (defined csd_ps_ring.c, written the
+ * L-site accept path, read via DIAG:UPSAMPLing:PACE?). */
+extern unsigned g_csd_wire_l0, g_csd_wire_seen, g_csd_wire_s1,
+                g_csd_wire_s2, g_csd_wire_n, g_csd_wire_tile;
+extern int      g_csd_ps_mbox_w0, g_csd_ps_mbox_w1;
 /* REVERT(dp171): per-iteration span at the floor site (ticks, 10ns). */
 unsigned g_csd_span_min = 0xFFFFFFFFu, g_csd_span_max = 0, g_csd_span_last = 0;
 unsigned g_csd_floor_n = 0, g_csd_f_dmax = 0;  /* REVERT(dp172) */
@@ -317,6 +334,77 @@ unsigned g_csd_lrclk_emit = 0;
 unsigned g_csd_lrclk_ts_min = 0xFFFFu;
 unsigned g_csd_lrclk_ts_max = 0;
 
+/* REVERT(dp181): mic zero-birth witnesses. WHY: at ratio-2 armed the mic
+ * stream carries ~40% exact-zero frames (runs of ~48, valid runs ~44);
+ * dp180 proved the echo tap injects none of it (hold-last change moved
+ * nothing). These counters localize the ZERO BIRTH across the three
+ * word-handling points of the stock USB-IN path: (1) raw ADC port IN
+ * word, (2) port-decimator store, (3) USB ship (outuint). Per point and
+ * channel: total words and exact-zero words. Deltas over a controlled
+ * armed window answer: port reads zero (codec/clock phase), or ships
+ * zero from a nonzero store (stale buffer shipped = staging/parity
+ * fault on the reader side). Two increments per word worst-case
+ * (~768k/s): ~5 MIPS on a core that measured 1000 available; the same
+ * shape of witness (CSD_ADC_DIAG) ran armed before. Unconditional per
+ * the dp167 phantom-flag rule; INFO? tail fields 121..131. */
+unsigned g_csd_w_portn[2] = {0,0}, g_csd_w_portz[2] = {0,0};
+unsigned g_csd_w_pubn[2]  = {0,0}, g_csd_w_pubz[2] = {0,0};
+unsigned g_csd_w_shipn[2] = {0,0}, g_csd_w_shipz[2] = {0,0};
+unsigned g_csd_w_exch = 0;      /* exchanges that shipped (non-CT path) */
+unsigned g_csd_w_iter = 0;      /* REVERT(dp203): unconditional while-loop-top
+                                 * counter — distinguishes 'reads skipped'
+                                 * (iter==exch>portn) from 'gate ran twice
+                                 * per read' (iter==portn<exch) on ratio-1
+                                 * legs. One stw/iter, exch precedent. */
+unsigned g_csd_w_dsdn = 0;      /* REVERT(dp203): iterations that took the
+                                 * DSD/DOP dispatch branch (no ADC reads) —
+                                 * the only source-level skip path. */
+unsigned g_csd_w_portu[2] = {0,0}; /* REVERT(dp203): unconditional raw-read
+                                 * witnesses (bit5-gate removal control). */
+/* REVERT(dp183): runtime attribution probe mask (defined in the app's
+ * csd_diag_scpi.c; set/query via DEBUG:CSD:PROBE). bit0 = skip the two
+ * csd_ups_slot pop calls; bit1 = skip the top-of-loop wire floor;
+ * bit4 = accumulate per-segment timer witnesses into g_csd_seg[]
+ * (DEBUG:CSD:SEG?). */
+extern unsigned g_csd_probe_mask;
+/* REVERT(dp185): segment timing witnesses [0..5]: L-port-read pass,
+ * R-port-read pass, DAC-L out+claim, DAC-R out+claim, floor block,
+ * exchange block (gate-true frames only). Ticks accumulated; seg_n counts
+ * frames. Only advanced when probe mask bit4 set (hot path: 1 test). */
+unsigned g_csd_seg[8] = {0,0,0,0,0,0,0,0};
+unsigned g_csd_seg_n = 0;
+/* REVERT(dp199-attr): whole-iteration timer (bit4-gated) + the sub-slices
+ * that were missing from the dp185 map: DAC-L out and DAC-R out (seg[4]
+ * repurposed from the floor — the floor is off by default and its own
+ * block already self-times via f_wait/f_skip), while-top->seg0a (seg[6])
+ * and the loop tail after the exchange gate (seg[7]). With these eight +
+ * g_csd_loop_ticks the ENTIRE wire iteration is accounted; any residue is
+ * per-op wake latency. */
+unsigned g_csd_loop_ticks = 0;
+unsigned g_csd_seg_b[6] = {0,0,0,0,0,0}; /* REVERT(dp199-attr): [0] DAC-L out,
+                                       * [1] DAC-R out, [2] while-top..ADC-L,
+                                       * [3] DAC-R-out-end..loop-bottom,
+                                       * [4] tailA..exchange-gate (dsd chk +
+                                       *     TDM bookkeeping),
+                                       * [5] gate-false else path (per frame
+                                       *     it runs) */
+static unsigned csd_gf_n = 0;          /* gate-false path sample count */
+/* REVERT(dp199-attr): LRCLK emit-interval witnesses per half-frame parity
+ * (bit5). port-ts domain, stock perfect = 32. Accessors for csd_diag_scpi. */
+unsigned g_csd_lr_min[2] = {0xFFFFu, 0xFFFFu};
+unsigned g_csd_lr_max[2] = {0, 0};
+unsigned g_csd_lr_sum[2] = {0, 0};
+unsigned g_csd_lr_n[2]   = {0, 0};
+void csd_lr_wit_get(unsigned *mn, unsigned *mx, unsigned *sm, unsigned *n)
+{ for (int i = 0; i < 2; i++) { mn[i]=g_csd_lr_min[i]; mx[i]=g_csd_lr_max[i];
+                                 sm[i]=g_csd_lr_sum[i]; n[i]=g_csd_lr_n[i]; } }
+void csd_lr_wit_clear(void)
+{ for (int i = 0; i < 2; i++) { g_csd_lr_min[i]=0xFFFFu; g_csd_lr_max[i]=0;
+                                g_csd_lr_sum[i]=0; g_csd_lr_n[i]=0; } }
+/* REVERT(dp199-attr): accessors for the SEG?/SEG:CLEAR surface (C file). */
+unsigned csd_gf_n_get(void) { return csd_gf_n; }
+void     csd_gf_n_clear(void) { csd_gf_n = 0; }
+
 /* Arm which count of the N-cycle the port decimator presents. Runs on the
  * control plane only -- ratio hand-overs and PHASE writes, never per word.
  * auto (or a choice at/above the last count) presents the LAST count, which is
@@ -332,6 +420,30 @@ static void xua_csd_decim_rearm(void)
 void xua_csd_set_usb_ratio(unsigned r)
 {
     g_csd_usb_ratio = (r == 8u || r == 4u || r == 2u) ? r : 1u;
+    /* REVERT(dp191): close the prefetch-wedge. The two-phase exchange
+     * (CSD_UPS_ASYNC) opens a StartSampleTransfer token one transfer frame
+     * early; if a ratio>1 stream ENDS in that window the token's reply is
+     * never consumed and g_csd_prefetch stays 1 into the next stream. The
+     * first exchange frame then runs CompleteSampleTransfer's 2x inuint
+     * against a reply the restarted decouple will never send: the wire
+     * loop wedged (measured dp190, second armed stream: 1,984 it/s,
+     * hostZ 1.0000). Decouple resets its stream FSM at stream start, so
+     * dropping the flag here re-synchronises both sides; an orphan token
+     * already queued by decouple only yields a one-frame-stale reply —
+     * exactly the lag the prefetch design already runs with. */
+    g_csd_prefetch = 0u;
+    /* REVERT(dp202): disarmed hand-over takes the DAC path back to stock.
+     * g_csd_ps_active is refreshed ONLY by the producer's armed /16 pass
+     * (csd_ps_ring.c); after an armed session then a ratio-1 stream, the
+     * producer parks without clearing, the wire claim sites keep the
+     * mailbox arm and ship stale csd_l0/csd_l1 -> a disarmed 384k leg
+     * following an armed leg played silence (measured mic RMS 40k vs the
+     * 2.97M ideal). Clear here -- control plane, wire-thread writer, once
+     * per stream start; NEVER on the armed path (r>1 does not clear), so
+     * the armed steady state stays byte-identical to the dp201-certified
+     * image. */
+    if (g_csd_usb_ratio == 1u)
+    { asm volatile("stw %0, dp[g_csd_ps_active]" :: "r"(0u) : "memory"); }
     /* 2026-11-10 port decimator: re-anchor at every ratio hand-over (the board
      * re-issues this at each AudioHwConfig -- stream start and every rate
      * change). WHY: N follows the host speaker rate, so the presented count must
@@ -447,6 +559,12 @@ static inline int HandleSampleClock(int frameCount, buffered _XUA_CLK_DIR port:3
     {
         p_lrclk <: clkVal;
         asm volatile(" getts %0, res[%1]" : "=r" (port_ts) : "r" (p_lrclk));
+        /* REVERT(dp192 TRIED, REVERTED dp193): gating this getts behind
+         * probe bit5 was measured (passT, 384k, dp192): the loopback tone
+         * degraded from peak 1001.1 Hz/87 dB to peak-bin 0 Hz garbage.
+         * The getts apparently paces something on the p_lrclk port path
+         * (timestamp sync semantics on the buffered port); do NOT gate it
+         * again without re-running both gate legs. */
     }
     else
     {
@@ -465,9 +583,23 @@ static inline int HandleSampleClock(int frameCount, buffered _XUA_CLK_DIR port:3
          * visible from the host. Writer: audio() task; reader: SCPI diag
          * thread (informational, same rules as g_csd_adc_*). REVERT: delete
          * this block and the g_csd_lrclk_* definitions above. */
-        g_csd_lrclk_emit++;
-        if (diff < g_csd_lrclk_ts_min) g_csd_lrclk_ts_min = diff;
-        if (diff > g_csd_lrclk_ts_max) g_csd_lrclk_ts_max = diff;
+        /* REVERT(dp204): ONE mask snapshot per emit (the parity block used
+         * to load g_csd_probe_mask itself), and the emit counter + ts
+         * sentinels moved behind bit5 with it: at PROBE 0 the whole block
+         * is one shared load + test; before, the emit++ RMW and the two
+         * sentinel compares ran on every half-frame of the zero-margin
+         * ratio-1 loop (2 emits/frame). Fields lrclk_emit/ts_min/ts_max
+         * stay at boot values unless DEBUG:CSD:PROBE 32 is set BEFORE the
+         * stream (same contract as adc_* under CSD_ADC_DIAG 0). */
+        const unsigned wit_m = g_csd_probe_mask;
+        if (wit_m & 32u) {
+            g_csd_lrclk_emit++;
+            unsigned p = (frameCount == 0) ? 0u : 1u;
+            if (diff < g_csd_lr_min[p]) g_csd_lr_min[p] = diff;
+            if (diff > g_csd_lr_max[p]) g_csd_lr_max[p] = diff;
+            g_csd_lr_sum[p] += diff;
+            g_csd_lr_n[p]++;
+        }
 #endif
 #if _XUA_ENABLE_I2S_TIMING_CHECK
         asm volatile("ecallf %0":: "r" (diff == 32));
@@ -590,6 +722,14 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
 
     /* REVERT(dp168): wire-cadence floor state (see wait at the frame tail) */
     timer wireTmr; unsigned wireNext = 0, wireTicks = 0, wireRem = 0, wireAcc = 0;
+    unsigned wireStal = 0u;  /* REVERT(dp187): staleness-divider for the
+                              * resync check (was a per-frame timer read) */
+    /* REVERT(dp189): mailbox pair registers + last-seq for the wire read
+     * (csd_ps_ring.c produce_pair publishes; single writer, this reader). */
+    unsigned csd_mbox_last = 0u, csd_l0 = 0, csd_l1 = 0;
+
+    timer tseg;   /* REVERT(dp185): segment timing witness timer (mask bit4) */
+    unsigned wireF = 1u;   /* REVERT(dp184): cached wire rate for the carry */
     /* REVERT(dp177): per-claim wire pacer — the exchange bursts multiple
      * frames per outer iteration, so the outer floor cannot pace claims:
      * measured claims 554k/s vs floor 443k/s vs wire 384k/s; mic_stale
@@ -604,6 +744,7 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
         unsigned syncError = 0;
         unsigned frameCount = 0;
         unsigned skip_ts_check = 1; // Skip I2S port timestamp check for the very first frame
+            const unsigned pmask_wire = g_csd_probe_mask; /* REVERT(dp202): one load per wire iteration; the per-site mask tests used to be individual cross-region loads on a zero-margin loop (dp184) -- passT leg paid ~10% wire rate for them. Snapshot per iteration is probe-lag <= 1 frame. */
 
         if ((I2S_CHANS_DAC > 0 || I2S_CHANS_ADC > 0))
         {
@@ -617,12 +758,40 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
         /* Note we always expect syncError to be 0 when we are master */
         while(!syncError)
         {
+            if (pmask_wire & 32u) { g_csd_w_iter++; } /* REVERT(dp203): bit5-gated
+             * (unconditional form cost 4 t/iter on the zero-margin ratio-1 loop,
+             * measured 379.7k/s vs 384k stride). */
+            /* REVERT(dp199-attr): iteration accounting anchors (bit4). */
+            unsigned loopA = 0, tailA = 0;
+            if (pmask_wire & 16u) tseg :> loopA;
+            /* REVERT(dp200-emit-first): armed (ratio>1) leg uses the
+             * half-frame pipelined emit schedule (see the emit blocks);
+             * ratio-1 (passT path) keeps the stock order. Read per
+             * iteration: the ratio is set at runtime on stream start. */
+            const unsigned csd_armed = (g_csd_usb_ratio > 1u);
             /* REVERT(dp172): THE wire schedule — top of loop, once per
              * iteration, before any work. Prior floors sat at the frame
              * tail: the exchange overshoot then always re-expired the next
              * deadline before it could be observed (f_wait stayed 0 across
              * dp166-171). Hard wait-first form; deep-stall resync only. */
-            if (g_csd_usb_ratio > 1u)
+            /* REVERT(dp190): the floor is OFF by default — PROBE mask bit1
+             * (DEBUG:CSD:PROBE 2) now ENABLES it for attribution runs
+             * (inverted from dp183's skip-bit). WHY: with the producer
+             * mailbox (dp189) off the wire thread, the floor block is a
+             * measured 65 t/frame (dp189 rate_probe: mask0 306.8k vs mask2
+             * 383.5k = the port-paced rate, hostZ 0.0007). The loop needs
+             * no software pacer: this loop EMITS the I2S clocks (master)
+             * and every frame ends in buffered-port traffic (p_lrclk <:
+             * per half-frame, p_i2s_dac <: per channel) whose hardware
+             * drain clock caps the emission at the wire rate — the
+             * 383,454/s mask2 rate IS the port clock. dp168 added the
+             * floor because the armed loop then free-ran at 221-245k —
+             * that was the claim/exchange stall, since moved off-thread;
+             * the floor's wait branch never fired (always behind), so it
+             * was pure cost. The ratio-1 pass leg has always run this way
+             * (floor is ratio>1 gated) and is gate-CLEAN. f_add_n moved
+             * out of the block; the block's own counters stay inside it. */
+            if (g_csd_usb_ratio > 1u && (pmask_wire & 2u))
             {
                 if (wireTicks == 0u)
                 {
@@ -638,6 +807,10 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                     {
                         wireTicks = XS1_TIMER_HZ / wf;
                         wireRem   = XS1_TIMER_HZ % wf;
+                        wireF     = wf;             /* REVERT(dp184): cached
+                                                     * carry modulus (was a
+                                                     * per-frame cross-file
+                                                     * csd_ups_diag_out_hz) */
                         wireTmr :> wireNext;
                         g_csd_f_armed_n++;
                         g_csd_wire_ticks_val = wireTicks;
@@ -646,54 +819,68 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                 if (wireTicks >= 1000000u) { wireTicks = 0u; }  /* bad latch */
                 if (wireTicks != 0u)
                 {
-                    /* REVERT(dp176): HARD pacer. The dp172 wait-first form
-                     * only waits when now < wireNext; the loop always
-                     * arrived LATE (dn>=0 skip every pass, f_wait 0), so
-                     * wireNext trailed and the loop free-ran at 443-554k
-                     * it/s against a 384k wire. Wait UNCONDITIONALLY on the
-                     * accumulator; the wait is a no-op only when genuinely
-                     * behind. Deep-stall resync keeps catch-up bounded. */
+                    /* REVERT(dp184): PURE deadline accumulator (was dp178
+                     * wait-then-anchor). WHY: anchoring wireNext to the
+                     * OBSERVED time (t1 after the wait, or t0 on the skip
+                     * branch) charges per-iteration compute+wake latency to
+                     * the schedule forever, so the loop self-paced at its
+                     * machine rate (measured 262.8k it/s vs 384k wire, dn
+                     * mostly positive). With a bare '+= stride' grid an
+                     * EARLY loop is paced exactly at the wire rate (the
+                     * wait absorbs); the deep-stall resync below bounds
+                     * the catch-up when the loop arrives far behind.
+                     * Witness arithmetic (dn min/max, span min/max) and the
+                     * per-frame f_* stores were pruned with it — they cost
+                     * ~40 t/frame on the critical path (dp183 probe: mask2
+                     * vs mask0). */
                     g_csd_floor_n++;
-                    unsigned t0; wireTmr :> t0;
-                    { int dn = (int)(t0 - wireNext);
-                      if ((unsigned)(dn + (int)0x80000000) < g_csd_dn_min) g_csd_dn_min = (unsigned)(dn + (int)0x80000000);
-                      if ((unsigned)(dn + (int)0x80000000) > g_csd_dn_max) g_csd_dn_max = (unsigned)(dn + (int)0x80000000);
-                      if (dn > (int)g_csd_f_dmax) g_csd_f_dmax = (unsigned)dn; }
-                    /* REVERT(dp178): wait-then-anchor. PACE? proved the
-                     * pure accumulator never catches up: the floor blocked
-                     * every iteration yet advanced only 180 t/step (the
-                     * loop's real cost) — timerafter() no-ops once the
-                     * deadline is past, so the 80 t/iter debt survived
-                     * forever. Anchor to the OBSERVED completion time. */
-                    if ((int)(t0 - wireNext) > (int)(10u * wireTicks))
-                    { g_csd_resync_n++; g_csd_f_skip_n++; wireNext = t0; }
-                    else if ((int)(t0 - wireNext) < 0)
-                    {   g_csd_f_wait_n++;
-                        wireTmr when timerafter(wireNext) :> void;
-                        unsigned t1; wireTmr :> t1;
-                        { unsigned sp = t1 - t0; g_csd_span_last = t1;
-                          if (sp < g_csd_span_min) g_csd_span_min = sp;
-                          if (sp > g_csd_span_max) g_csd_span_max = sp; }
-                        wireNext = t1;   /* dp178: anchor to observed */
-                    }
-                    else { g_csd_f_skip_n++; wireNext = t0; }
-                    {   unsigned wf2 = csd_ups_diag_out_hz();
-                        if (wf2 >= 44100u && wf2 <= 768000u)
-                        { wireAcc += wireRem;
-                          if (wireAcc >= wf2) { wireNext++; wireAcc -= wf2; } } }
-                    g_csd_wire_ticks_val = wireTicks;   /* REVERT(dp177): live */
-                    g_csd_f_wnext2 = wireNext;          /* REVERT(dp177) */
+                    unsigned seg4a; if (pmask_wire & 16u) tseg :> seg4a;
+                    /* REVERT(dp187): the per-frame 'wireTmr :> t0' + 3-way
+                     * branch is replaced by the one wait the schedule
+                     * actually uses. WHY: dp186 attribution (PROBE mask
+                     * bit1 vs 0, rate_probe) priced this block at ~35 t of
+                     * the 326 t/frame loop against a 260 t stride; while
+                     * compute-bound the deadline is ALWAYS already past, so
+                     * the read bought nothing but the wait/skip witness
+                     * counts and the deep-stall guard. 'when timerafter' on
+                     * an expired deadline completes immediately: one timer
+                     * op paces when early, costs nothing when late. The
+                     * staleness/resync check (and the wait/skip counts,
+                     * now 1-in-256 samples) run every 256th frame — a deep
+                     * stall then free-runs at most 256 frames before the
+                     * deadline re-anchors, bounded. */
+                    wireTmr when timerafter(wireNext) :> void;
+                    { wireAcc += wireRem;
+                      if (wireAcc >= wireF) { wireNext++; wireAcc -= wireF; } }
                     wireNext += wireTicks;
-                    g_csd_f_add_n++;
-                    g_csd_f_wnext = wireNext; g_csd_f_now2 = t0;
-                    g_csd_f_wt = wireTicks;
+                    if (++wireStal >= 256u)
+                    {
+                        wireStal = 0u;
+                        unsigned t0; wireTmr :> t0;
+                        if ((int)(t0 - wireNext) > (int)(10u * wireTicks))
+                        { g_csd_resync_n++; wireNext = t0; }
+                        else if ((int)(t0 - wireNext) < 0)
+                        { if (pmask_wire & 32u) g_csd_f_wait_n++; }
+                        else { if (pmask_wire & 32u) g_csd_f_skip_n++; }
+                    }
+                    if (pmask_wire & 16u)
+                    { unsigned seg4b; tseg :> seg4b; g_csd_seg[4] += seg4b - seg4a; }
                 }
             }
+            /* REVERT(dp190): loop-rate witness moved OUT of the optional
+             * floor block (rate_probe field 130; counts wire iterations
+             * at ratio>1 whether the floor is on or off).
+             * REVERT(dp199): gated behind probe bit5 (DEBUG:CSD:PROBE 32) —
+             * a pure witness RMW (global load+add+store) on EVERY wire
+             * frame; the PACE? window witnesses (p_dwl/p_tdl) give the
+             * same rate attribution without it, so the hot path pays only
+             * the mask test. Read f_add_n only in PROBE-32 legs. */
+            if (g_csd_usb_ratio > 1u && (pmask_wire & 32u)) { g_csd_f_add_n++; }
 #if (DSD_CHANS_DAC != 0) && (NUM_USB_CHAN_OUT > 0)
             if(dsdMode == DSD_MODE_NATIVE)
-                DoDsdNative(samplesOut, dsdSample_l, dsdSample_r, divide);
+            { g_csd_w_dsdn++; DoDsdNative(samplesOut, dsdSample_l, dsdSample_r, divide); }
             else if(dsdMode == DSD_MODE_DOP)
-                DoDsdDop(everyOther, samplesOut, dsdSample_l, dsdSample_r, divide);
+            { g_csd_w_dsdn++; DoDsdDop(everyOther, samplesOut, dsdSample_l, dsdSample_r, divide); }
             else
 #endif
             {
@@ -704,7 +891,59 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                     memset(&i2sInDs3Sum, 0, sizeof i2sInDs3Sum);
                 }
 #endif /* (AUD_TO_USB_RATIO > 1) */
+                /* REVERT(dp200-emit-first): emit-first for the ARMED legs.
+                 * Witness (per-parity LRCLK emit intervals, SEG? fields
+                 * 18-25, PROBE 48, armed 192k leg, flashed 0dd1ec9c):
+                 *   parity0 (L-slot) min=0 max=103 mean=34.2
+                 *   parity1 (R-slot) min=0 max=104 mean=47.1 (port-ts,
+                 *   perfect=32). The whole cadence slip sits in the
+                 *   LRCLK0->LRCLK1 interval: the LRCLK1 edge is gated
+                 *   BEHIND the blocking ADC-R read in the stock order
+                 *   (ADC-L, emit0, DACL, ADC-R, emit1, DACR), so any
+                 *   input-side delay moves a CLOCK EDGE on the wire.
+                 * The armed DAC words come from the producer mailbox --
+                 * no input-read dependency -- so the armed path pre-arms
+                 * the pair and queues all four port ops (LRCLK0, DACL,
+                 * LRCLK1, DACR) back-to-back at the top of the iteration,
+                 * then consumes the port-buffered input words while the
+                 * tail (exchange/UBM) runs. Ratio-1 (the CLEAN passT
+                 * path) keeps the stock order, untouched. */
+                if (csd_armed)
+                {
+                    /* REVERT(dp200): half-frame pipelined emit. ACCEPT-time
+                     * witnesses (build ce470: back-to-back queueing gave
+                     * HC0->HC1 accept interval 48.5 port-ts while only
+                     * ~20 t of code sits between them => the p_lrclk port
+                     * serializes accepts at drain granularity: the LRCLK1
+                     * write cannot enter the port until LRCLK0's 32-bit
+                     * shift is nearly done, so it always leaves the pin
+                     * one half-word late). Interleave instead: queue
+                     * LRCLK0+DACL now, consume the L input word (which
+                     * returns at ~the LRCLK0 drain end), then queue
+                     * LRCLK1+DACR exactly when the port is free.
+                     * The words are LAST iteration's pop (pop moved below
+                     * the ADC-R read, dp200): the accept path now carries
+                     * nothing but the port ops -- one pair of words is in
+                     * flight, the hold-last mailbox semantics already ran
+                     * that way (producer leads by one pair). */
+                    syncError += HandleSampleClock(0, p_lrclk, skip_ts_check);
+                    unsigned sb4a; if (pmask_wire & 16u) tseg :> sb4a;
+                    if(XUA_I2S_N_BITS == 32)
+                        p_i2s_dac[0] <: bitrev(csd_l0);
+                    else
+                        partout(p_i2s_dac[0], XUA_I2S_N_BITS, bitrev(csd_l0));
+                    if (pmask_wire & 16u)
+                    { unsigned sb; tseg :> sb; g_csd_seg_b[0] += sb - sb4a; }
+                }
+                /* REVERT(dp200): pop moved below the ADC-R read -- the dead
+                 * anchor block that lived here is deleted; the pair is read
+                 * at the loop bottom and the emits above use LAST frame's
+                 * pair (hold-last one-word-in-flight, matching the
+                 * producer's one-pair lead). */
                 /* Input previous L sample into L in buffer */
+                unsigned seg0a; if (pmask_wire & 16u) tseg :> seg0a;
+                if (pmask_wire & 16u)
+                { unsigned sb; tseg :> sb; g_csd_seg_b[2] += sb - loopA; }
                 index = 0;
                 /* First input (i.e. frameCount == 0) we read last ADC channel of previous frame.. */
                 /* REVERT(dp159 2026-11-13): frameCount never exceeds 1
@@ -721,6 +960,7 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                     // Manual IN instruction since compiler generates an extra setc per IN (bug #15256)
                     unsigned sample;
                     asm volatile("in %0, res[%1]" : "=r"(sample)  : "r"(p_i2s_adc[index]));
+                    if (pmask_wire & 32u) { g_csd_w_portu[0]++; } /* REVERT(dp203) */
 
                     sample = bitrev(sample);
                     if(XUA_I2S_N_BITS != 32)
@@ -731,7 +971,20 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                     index++;
 
                     int chanIndex = ((frameCount-2) & (I2S_CHANS_PER_FRAME-1)) + i; // channels 0, 2, 4.. on each line.
-#ifdef CSD_ADC_DIAG
+                    /* REVERT(dp181): raw-word zero-birth witness (see decl).
+                     * REVERT(dp186): counter stores gated behind probe mask
+                     * bit5 (DEBUG:CSD:PROBE 32) — dp185 SEG timing showed
+                     * the per-word witness stores are a first-order share
+                     * of the armed wire budget. */
+                    if ((pmask_wire & 32u) && (unsigned)chanIndex < 2u) {
+                        g_csd_w_portn[chanIndex]++;
+                        if (sample == 0u) g_csd_w_portz[chanIndex]++;
+                    }
+#if CSD_ADC_DIAG /* REVERT(dp204): was #ifdef — `#define CSD_ADC_DIAG 0`
+                  * above does NOT undefine it, so the dp185 disable never
+                  * took effect and these 3 RMWs/word (6/frame) ran on the
+                  * zero-margin ratio-1 wire loop (measured adc_cnt
+                  * advancing 384k/s with the switch 'off'). */
                     if ((unsigned)chanIndex < 2u) {   /* raw witness, see decl */
                         g_csd_adc_cnt[chanIndex]++;
                         g_csd_adc_or[chanIndex] |= sample;
@@ -771,8 +1024,14 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
   #endif
                     {
                         samplesIn[buffIndex][chanIndex] = sample;
+                        /* REVERT(dp181): store-point zero-birth witness.
+                         * REVERT(dp186): gated behind probe mask bit5. */
+                        if ((pmask_wire & 32u) && (unsigned)chanIndex < 2u) {
+                            g_csd_w_pubn[chanIndex]++;
+                            if (sample == 0u) g_csd_w_pubz[chanIndex]++;
+                        }
 #ifdef CSD_UPS_ASYNC
-                        g_csd_dec_pub++;
+                        if (pmask_wire & 32u) { g_csd_dec_pub++; } /* REVERT(dp191) */
 #endif
                     }
 #endif /* (AUD_TO_USB_RATIO > 1) */
@@ -780,12 +1039,33 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
 #endif
 
 #if (I2S_CHANS_ADC != 0 || I2S_CHANS_DAC != 0)
-                syncError += HandleSampleClock(frameCount, p_lrclk, skip_ts_check);
+                if (!csd_armed) /* REVERT(dp200-emit-first): armed emits at top */
+                    syncError += HandleSampleClock(frameCount, p_lrclk, skip_ts_check);
 #endif
+                if (pmask_wire & 16u)
+                { unsigned seg0b; tseg :> seg0b; g_csd_seg[0] += seg0b - seg0a; }
+                if (csd_armed)
+                {
+                    /* REVERT(dp200): LRCLK1+DACR queued at the half-frame
+                     * boundary (see the split-emit note above). */
+                    syncError += HandleSampleClock(1, p_lrclk, skip_ts_check);
+                    unsigned sb5a; if (pmask_wire & 16u) tseg :> sb5a;
+                    /* One wire carries both halves (I2S_WIRES_DAC==1): the
+                     * stock L/R loops each restart index at 0, i.e. both
+                     * words go to p_i2s_dac[0]. */
+                    if(XUA_I2S_N_BITS == 32)
+                        p_i2s_dac[0] <: bitrev(csd_l1);
+                    else
+                        partout(p_i2s_dac[0], XUA_I2S_N_BITS, bitrev(csd_l1));
+                    if (pmask_wire & 16u)
+                    { unsigned sb; tseg :> sb; g_csd_seg_b[1] += sb - sb5a; }
+                }
 
 #pragma xta endpoint "i2s_output_l"
 
 #if (I2S_CHANS_DAC != 0)
+                if (!csd_armed) /* REVERT(dp200-emit-first) */
+                {
                 index = 0;
 #pragma loop unroll
                 /* Output "even" channel to DAC (i.e. left) */
@@ -805,25 +1085,109 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                     }
 #endif /* (AUD_TO_USB_RATIO > 1) */
 #ifdef CSD_UPS_ASYNC
-                    if (g_csd_usb_ratio > 1u) {
+                    /* REVERT(dp183): g_csd_probe_mask bit0 short-circuits the
+                     * pop calls (attribution probe, csd_diag_scpi.c).
+                     * REVERT(dp184): claim restored (dp161 machinery) — the
+                     * dp183 probe proved the in-loop pop (78 t/frame) is
+                     * what kept the wire loop 120 t over its 260 t budget;
+                     * the producer thread pays it outside the frame. */
+                    if (g_csd_usb_ratio > 1u && !(pmask_wire & 1u)) {
                         /* Wire-rate slot (owner directive 2026-11-08): the
                          * word for this slot comes from the upsampler's
                          * band-limited queue, not from the host pair sitting
-                         * in samplesOut. csd_ups_slot returns the input word
+                         * in samplesOut. csd_ps_claim returns the input word
                          * untouched when the path is not active, so a
                          * disarmed stream keeps stock behaviour. ch =
                          * frameCount + i is the wire channel (0 = L, 1 = R),
                          * the same identity the bitrev write below uses. */
-                        samplesOut[frameCount + i] =
-                            (unsigned)csd_ups_slot((unsigned)(frameCount + i),   /* REVERT(dp179): direct pop restored — the dp161 producer/claim-ring never achieved wire lock; direct pop is the dp157 bit-exact-certified architecture */
-                                                   (int)samplesOut[frameCount + i]);
+                        unsigned seg2a; if (pmask_wire & 16u) tseg :> seg2a;
+                        /* REVERT(dp189): csd_ps_claim(0u, w) replaced by an
+                         * inline seqlock read of the producer mailbox — the
+                         * wire thread no longer calls into csd_ps_ring.c at
+                         * all (wall proof in csd_ps_ring.c produce_pair).
+                         * s1/s2 bracket the word reads; s1 odd (producer in
+                         * its publish window) or s1 != s2 (pair advanced
+                         * mid-read) retries, capped at 3 then accepted.
+                         * s2 == last seq = producer has not published since
+                         * the previous frame -> honest repeat + starve
+                         * witness, same semantics the claim gave. */
+                        if (g_csd_ps_active) {
+                            /* REVERT(dp199b): ONE seq read. The dp189
+                             * bracket form (two seq ldw + compare + retry
+                             * test per frame) existed to catch preemption
+                             * mid-read — impossible here: the producer
+                             * (csd_ps_thread) runs in audiohub's INTERNAL
+                             * par, same core, cooperative (see its header),
+                             * and this block contains no sync op, so the
+                             * wire task is never interrupted between the
+                             * seq read and the word loads. Even seq => the
+                             * pair is complete and stable (producer stores
+                             * words before the even bump; a mid-publish
+                             * read sees ODD -> bounded retry; a producer
+                             * spin is not a yield). Retains: 3-retry,
+                             * honest repeat, bit5-gated starve. */
+                            unsigned s1 = 1u, try_n = 0u;
+                            for (;;) {
+                                asm volatile("ldw %0, dp[g_csd_ps_mbox_seq]"
+                                             : "=r"(s1));
+                                if ((s1 & 1u) == 0u) {
+                                    csd_l0 = (unsigned)g_csd_ps_mbox_w0;
+                                    csd_l1 = (unsigned)g_csd_ps_mbox_w1;
+                                    break;
+                                }
+                                if (++try_n >= 3u) break;
+                            }
+                            /* REVERT(dp196): the producer's pacing clock —
+                             * ONE C increment per wire frame (3 memops, no
+                             * asm barriers). Producer paces passes == this
+                             * rate (csd_ps_thread.xc). Rejected forms:
+                             * consume-SEQ cursors mis-counted through
+                             * seqlock races (.63/.64/.65); the word-
+                             * identity 'fresh' clock deadlocked the rate
+                             * loop at the clamp whenever ring-repeats made
+                             * published words equal (.71: pinned 290 t
+                             * despite passes 344.8k > wire 307.0k). */
+                            g_csd_wire_n++;
+                            /* REVERT(dp198): seq-identity fresh witness --
+                             * this frame's accepted pair MOVED (seq
+                             * advanced) vs the dp196 word-identity form
+                             * that deadlocked on equal published words.
+                             * Diagnostic only; the dp198 controller paces
+                             * on g_csd_wire_n itself.
+                             * REVERT(dp199): fresh and starve folded into
+                             * ONE comparison (was two compares of the same
+                             * pair plus an unconditional last-store); the
+                             * starve arm keeps its bit5 gate. */
+                            if (s1 != csd_mbox_last && !(s1 & 1u)) {
+                                g_csd_ps_fresh++;
+                                csd_mbox_last = s1;
+                            } else if (pmask_wire & 32u) {
+                                unsigned sv;
+                                asm volatile("ldw %0, dp[g_csd_ps_starve]"
+                                             : "=r"(sv));
+                                sv++;
+                                asm volatile("stw %0, dp[g_csd_ps_starve]"
+                                             :: "r"(sv));
+                            }
+                            samplesOut[frameCount + i] = csd_l0;
+                        } else {
+                            samplesOut[frameCount + i] =
+                                (unsigned)csd_ups_slot(0u, (int)samplesOut[frameCount + i]);
+                        }
+                        if (pmask_wire & 16u)
+                        { unsigned seg2b; tseg :> seg2b; g_csd_seg[2] += seg2b - seg2a; }
                     }
 #endif /* CSD_UPS_ASYNC */
+                    /* REVERT(dp199-attr): DAC-L out slice (bit4). */
+                    unsigned sb4a; if (pmask_wire & 16u) tseg :> sb4a;
                     if(XUA_I2S_N_BITS == 32)
                         p_i2s_dac[index++] <: bitrev(samplesOut[frameCount +i]);
                     else
                         partout(p_i2s_dac[index++], XUA_I2S_N_BITS, bitrev(samplesOut[frameCount +i]));
+                    if (pmask_wire & 16u)
+                    { unsigned sb; tseg :> sb; g_csd_seg_b[0] += sb - sb4a; }
                 }
+                } /* REVERT(dp200-emit-first): !csd_armed DAC-L block end */
 #endif // (I2S_CHANS_DAC != 0)
 
             if(frameCount == 0)
@@ -881,6 +1245,7 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
            frameCount++;
 
 #if (I2S_CHANS_ADC != 0)
+                unsigned seg1a; if (pmask_wire & 16u) tseg :> seg1a;
                 index = 0;
                 /* Channels 0, 2, 4.. on each line */
 #pragma loop unroll
@@ -889,8 +1254,13 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                     /* Manual IN instruction since compiler generates an extra setc per IN (bug #15256) */
                     unsigned sample;
                     asm volatile("in %0, res[%1]" : "=r"(sample)  : "r"(p_i2s_adc[index]));
-                    g_csd_adc_ctr_seen |= 1u << (audioToUsbRatioCounter & 7u);
-                    g_csd_adc_fc_seen  |= 1u << (frameCount & 7u);
+                    if (pmask_wire & 32u) { g_csd_w_portu[1]++; } /* REVERT(dp203) */
+                    /* REVERT(dp191): per-frame debug-witness RMWs behind
+                     * probe bit5 (DEBUG:CSD:PROBE 32). */
+                    if (pmask_wire & 32u) {
+                        g_csd_adc_ctr_seen |= 1u << (audioToUsbRatioCounter & 7u);
+                        g_csd_adc_fc_seen  |= 1u << (frameCount & 7u);
+                    }
                     sample = bitrev(sample);
                     if(XUA_I2S_N_BITS != 32)
                     {
@@ -900,7 +1270,16 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                     index++;
 
                     int chanIndex = ((frameCount-2)&(I2S_CHANS_PER_FRAME-1))+i; // channels 1, 3, 5.. on each line.
-#ifdef CSD_ADC_DIAG
+                    /* REVERT(dp181): raw-word zero-birth witness (see decl).
+                     * REVERT(dp186): counter stores gated behind probe mask
+                     * bit5 (DEBUG:CSD:PROBE 32) — dp185 SEG timing showed
+                     * the per-word witness stores are a first-order share
+                     * of the armed wire budget. */
+                    if ((pmask_wire & 32u) && (unsigned)chanIndex < 2u) {
+                        g_csd_w_portn[chanIndex]++;
+                        if (sample == 0u) g_csd_w_portz[chanIndex]++;
+                    }
+#if CSD_ADC_DIAG /* REVERT(dp204): was #ifdef — see the sibling site's note */
                     if ((unsigned)chanIndex < 2u) {   /* raw witness, see decl */
                         g_csd_adc_cnt[chanIndex]++;
                         g_csd_adc_or[chanIndex] |= sample;
@@ -939,8 +1318,14 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
   #endif
                     {
                         samplesIn[buffIndex][chanIndex] = sample;
+                        /* REVERT(dp181): store-point zero-birth witness.
+                         * REVERT(dp186): gated behind probe mask bit5. */
+                        if ((pmask_wire & 32u) && (unsigned)chanIndex < 2u) {
+                            g_csd_w_pubn[chanIndex]++;
+                            if (sample == 0u) g_csd_w_pubz[chanIndex]++;
+                        }
 #ifdef CSD_UPS_ASYNC
-                        g_csd_dec_pub++;
+                        if (pmask_wire & 32u) { g_csd_dec_pub++; } /* REVERT(dp191) */
 #endif
                     }
 #endif /* (AUD_TO_USB_RATIO > 1) && !I2S_DOWNSAMPLE_MONO_IN */
@@ -948,11 +1333,63 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
 #endif /* I2S_CHANS_ADC != 0) */
 
 #if (I2S_CHANS_ADC != 0 || I2S_CHANS_DAC != 0)
-                syncError += HandleSampleClock(frameCount, p_lrclk, skip_ts_check);
+                if (!csd_armed) /* REVERT(dp200-emit-first): armed emits at top */
+                    syncError += HandleSampleClock(frameCount, p_lrclk, skip_ts_check);
 #endif
+                if (pmask_wire & 16u)
+                { unsigned seg1b; tseg :> seg1b; g_csd_seg[1] += seg1b - seg1a; }
+
+                /* REVERT(dp200): producer mailbox pop for NEXT frame's
+                 * emits, taken here (after both input reads) so the
+                 * accept path above carries nothing but port ops. The
+                 * pop-L body as ever; the guarded stock DAC-R loop's own
+                 * pop-R site is armed-skipped (csd_l1 is filled here). */
+                if (csd_armed && !(pmask_wire & 1u))
+                {
+                    unsigned seg2a; if (pmask_wire & 16u) tseg :> seg2a;
+                    if (g_csd_ps_active) {
+                        unsigned s1 = 1u, try_n = 0u;
+                        for (;;) {
+                            asm volatile("ldw %0, dp[g_csd_ps_mbox_seq]"
+                                         : "=r"(s1));
+                            if ((s1 & 1u) == 0u) {
+                                csd_l0 = (unsigned)g_csd_ps_mbox_w0;
+                                csd_l1 = (unsigned)g_csd_ps_mbox_w1;
+                                break;
+                            }
+                            if (++try_n >= 3u) break;
+                        }
+                        g_csd_wire_n++;
+                        if (s1 != csd_mbox_last && !(s1 & 1u)) {
+                            g_csd_ps_fresh++;
+                            csd_mbox_last = s1;
+                        } else if (pmask_wire & 32u) {
+                            unsigned sv;
+                            asm volatile("ldw %0, dp[g_csd_ps_starve]"
+                                         : "=r"(sv));
+                            sv++;
+                            asm volatile("stw %0, dp[g_csd_ps_starve]"
+                                         :: "r"(sv));
+                        }
+                        samplesOut[0] = csd_l0;   /* keep samplesOut honest
+                                                   * for diagnostics, but the
+                                                   * emits read csd_l0/l1:
+                                                   * the exchange's inuint
+                                                   * rewrites samplesOut[0/1]
+                                                   * later THIS iteration */
+                        samplesOut[1] = csd_l1;
+                    } else {
+                        csd_l0 = (unsigned)csd_ups_slot(0u, (int)samplesOut[0]);
+                        csd_l1 = (unsigned)csd_ups_slot(1u, (int)samplesOut[1]);
+                    }
+                    if (pmask_wire & 16u)
+                    { unsigned seg2b; tseg :> seg2b; g_csd_seg[2] += seg2b - seg2a; }
+                }
 
                 index = 0;
 #if (I2S_CHANS_DAC != 0)
+                if (!csd_armed) /* REVERT(dp200-emit-first) */
+                {
                 /* Output "odd" channel to DAC (i.e. right) */
 #pragma loop unroll
                 for(int i = 0; i < I2S_CHANS_DAC; i+=I2S_CHANS_PER_FRAME)
@@ -971,7 +1408,9 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                     }
 #endif /* (AUD_TO_USB_RATIO > 1) */
 #ifdef CSD_UPS_ASYNC
-                    if (g_csd_usb_ratio > 1u) {
+                    /* REVERT(dp183): g_csd_probe_mask bit0 (see above site).
+                     * REVERT(dp184): claim restored (see above site). */
+                    if (g_csd_usb_ratio > 1u && !(pmask_wire & 1u)) {
                         /* Wire-rate slot, RIGHT channel (owner directive
                          * 2026-11-08; the pop was left-channel-only, so the
                          * R ring filled and never drained -- popsR 0,
@@ -984,25 +1423,54 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                          * single iteration i == 0. Hence (frameCount + i)
                          * evaluates to exactly 1 -- the same index the
                          * bitrev write below reads for the R wire slot.
-                         * csd_ups_slot returns w untouched when the path is
+                         * csd_ps_claim returns w untouched when the path is
                          * not active, so a disarmed stream is stock. */
-                        samplesOut[frameCount + i] =
-                            (unsigned)csd_ups_slot((unsigned)(frameCount + i),   /* REVERT(dp179): direct pop restored — the dp161 producer/claim-ring never achieved wire lock; direct pop is the dp157 bit-exact-certified architecture */
-                                                   (int)samplesOut[frameCount + i]);
+                        unsigned seg3a; if (pmask_wire & 16u) tseg :> seg3a;
+                        /* REVERT(dp187): was csd_ps_claim(1u, w) — a cross-TU
+                         * call whose live body is 'return s_latch1' plus the
+                         * inactive fallback. dp186 bit0-vs-0 attribution put
+                         * ~30 t/frame on the two claim calls; the R half is
+                         * now two global loads the same thread's L claim
+                         * wrote earlier THIS iteration (csd_ps_ring.c:
+                         * g_csd_ps_active, g_csd_ps_latch1). Inactive path
+                         * keeps the stock csd_ups_slot passthrough. */
+                        if (g_csd_ps_active) {
+                            samplesOut[frameCount + i] = csd_l1;
+                        } else {
+                            samplesOut[frameCount + i] =
+                                (unsigned)csd_ups_slot(1u, (int)samplesOut[frameCount + i]);
+                        }
+                        if (pmask_wire & 16u)
+                        { unsigned seg3b; tseg :> seg3b; g_csd_seg[3] += seg3b - seg3a; }
                     }
 #endif /* CSD_UPS_ASYNC */
+                    /* REVERT(dp199-attr): DAC-R out slice (bit4). */
+                    unsigned sb5a; if (pmask_wire & 16u) tseg :> sb5a;
                     if(XUA_I2S_N_BITS == 32)
                         p_i2s_dac[index++] <: bitrev(samplesOut[frameCount + i]);
                     else
                         partout(p_i2s_dac[index++], XUA_I2S_N_BITS, bitrev(samplesOut[frameCount + i]));
+                    if (pmask_wire & 16u)
+                    { unsigned sb; tseg :> sb; g_csd_seg_b[1] += sb - sb5a; }
                 }
+                } /* REVERT(dp200-emit-first): !csd_armed DAC-R block end */
 #endif // (I2S_CHANS_DAC != 0)
+                /* REVERT(dp199-attr): tail anchor: everything after the DAC-R
+                 * out loop (dsd check, frame-boundary bookkeeping, exchange
+                 * gate, tail floor latch) up to the loop bottom. */
+                if (pmask_wire & 16u) tseg :> tailA;
 
             }  // !dsdMode
 
 
 #if (DSD_CHANS_DAC != 0) && (NUM_USB_CHAN_OUT > 0)
-            if(DoDsdDopCheck(dsdMode, dsdCount, curSamFreq, samplesOut, dsdMarker) == 0)
+            /* REVERT(dp200): armed-skip. The DoP/DSD detector votes on
+             * samplesOut, which the armed mailbox pop owns (the host DoP
+             * markers never reach it) -- armed DSD is not a supported
+             * lane, and the check costs 12 t/frame on the accept-critical
+             * iteration segment. Ratio-1 keeps it. */
+            if(!csd_armed &&
+               DoDsdDopCheck(dsdMode, dsdCount, curSamFreq, samplesOut, dsdMarker) == 0)
             {
 #if (I2S_CHANS_ADC != 0) || (I2S_CHANS_DAC != 0)
                 // Set clocks low
@@ -1054,14 +1522,25 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                  * 96k pairs/s). */
                 /* REVERT(dp171): counter ticks once per while-iteration = per WIRE frame;
                  * one exchange per ratio wire frames -> threshold ratio-1. */
+                /* REVERT(dp199-attr): gate-entry slice (tailA..here = dsd
+                 * check + TDM bookkeeping + the gate decision itself). */
+                unsigned gateA = 0; if (pmask_wire & 16u) tseg :> gateA;
+                if (pmask_wire & 16u)
+                { unsigned sb; tseg :> sb; g_csd_seg_b[4] += sb - tailA; }
                 if (audioToUsbRatioCounter >= (g_csd_usb_ratio - 1u))
 #else
                 if ((AUD_TO_USB_RATIO - 1) == audioToUsbRatioCounter)
 #endif
                 {
-                    g_csd_gate_true++; g_csd_ratio_live = g_csd_usb_ratio;
-                    { timer ttt; ttt :> g_csd_tt_a; }
-                    /* Do samples transfer */
+                    /* REVERT(dp199-attr): gate-false timing + gate-entry slice. */
+                    /* REVERT(dp204): bit5-gated (was unconditional). The gate
+                     * fires every iteration at ratio 1 (zero-margin wire
+                     * loop): 2 shared-region RMWs ~10 t/iter. g_csd_w_exch
+                     * stays unconditional as the lean-wire-rate oracle. */
+                    if (pmask_wire & 32u) {
+                        g_csd_gate_true++; g_csd_ratio_live = g_csd_usb_ratio;
+                    }
+                    unsigned seg5a; if (pmask_wire & 16u) tseg :> seg5a;                    /* Do samples transfer */
 #ifdef CSD_UPS_ASYNC
                     /* PORT DECIMATOR per-cycle re-arm. The transfer boundary is
                      * where the pacing block resets audioToUsbRatioCounter, i.e.
@@ -1090,8 +1569,7 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                     if (g_csd_usb_ratio > 1u && g_csd_prefetch)
                     {
                         g_csd_prefetch = 0;
-                        g_csd_prefetch_hits++;
-                        g_csd_xfer_tok++; /* REVERT(dp168) */
+                        if (pmask_wire & 32u) { g_csd_prefetch_hits++; g_csd_xfer_tok++; } /* REVERT(dp168, dp191) */
                         unsigned pcmd = XUA_AUDCTL_NO_COMMAND;
 #ifdef CSD_XFER_TIMING
                         CompleteSampleTransferTimed(c_aud, readBuffNo, pcmd, 1);
@@ -1109,7 +1587,7 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                     {
                     /* The below looks a bit odd but forces the compiler to inline twice */
                     unsigned command;
-                    g_csd_xfer_else++; /* REVERT(dp168) */
+                    if (pmask_wire & 32u) { g_csd_xfer_else++; } /* REVERT(dp168, dp191) */
 #ifdef CSD_XFER_TIMING
                     /* HOW LONG DOES THE USB EXCHANGE STALL THE BIT-TIMED LOOP?
                      * The loop is proven clock-locked when the exchange is
@@ -1180,14 +1658,21 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                 /* Reset audio to usb counter because we have now completed one USB transfer and flip the ADC buffer */
                     audioToUsbRatioCounter = 0;
                     readBuffNo = !readBuffNo;
+                    if (pmask_wire & 16u)
+                    { unsigned seg5b; tseg :> seg5b; g_csd_seg[5] += seg5b - seg5a; }
                 }
                 else
                 {
+                    /* REVERT(dp199-attr): price the gate-false path. */
+                    unsigned gfA = 0; if (pmask_wire & 16u) tseg :> gfA;
                     ++audioToUsbRatioCounter;
-                    g_csd_gate_false++;
+                    if (pmask_wire & 32u) { g_csd_gate_false++; } /* REVERT(dp191) */
+                    if (pmask_wire & 16u)
+                    { unsigned sb; tseg :> sb; g_csd_seg_b[5] += sb - gfA; csd_gf_n++; }
                 }
                 /* Reset the framecount because we have outputted all channels in the frame now */
                 frameCount = 0;
+                if (pmask_wire & 16u) g_csd_seg_n++;   /* REVERT(dp185) */
                 /* REVERT(dp168 2026-11-13): wire-cadence floor, once per wire
                  * frame, unconditional, runtime-gated. WHY: armed (ratio>1) the
                  * loop had no per-frame wait — the exchange moved to every
@@ -1225,10 +1710,15 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                     }
 
                 }
-                { timer ttt; unsigned z; ttt :> z;
-                  g_csd_tt_ticks += z - g_csd_tt_a; g_csd_tt_n++; }
-                g_csd_c_tail++; /* REVERT(dp168) */
+                /* REVERT(dp184): per-frame tail timer block (tt_ticks/tt_n)
+                 * removed — two timer reads + arithmetic on every wire
+                 * frame for a diagnostic nobody reads (dp183 probe budget). */
+                if (pmask_wire & 32u) { g_csd_c_tail++; } /* REVERT(dp168, dp191: bit5-gated) */
             }
+            /* REVERT(dp199-attr): iteration total + tail slice. */
+            if (pmask_wire & 16u)
+            { unsigned lc; tseg :> lc;
+              g_csd_seg_b[3] += lc - tailA; g_csd_loop_ticks += lc - loopA; }
             skip_ts_check = 0;
         }
     }
