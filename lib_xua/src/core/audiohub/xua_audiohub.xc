@@ -791,7 +791,20 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
              * was pure cost. The ratio-1 pass leg has always run this way
              * (floor is ratio>1 gated) and is gate-CLEAN. f_add_n moved
              * out of the block; the block's own counters stay inside it. */
-            if (g_csd_usb_ratio > 1u && (pmask_wire & 2u))
+            /* REVERT(dp205): the floor is ON by default for armed legs —
+             * PROBE mask bit1 (DEBUG:CSD:PROBE 2) now OPTS OUT. WHY: dp190's
+             * "the buffered port drain caps the loop at the wire rate" claim
+             * is FALSE on this build. Measured (image ff386d75, 48k armed,
+             * PROBE 0, 8 s window): wire_n 495,758/s (+29% over the 384,000
+             * nominal), popsL 452,575/s, and DAC slots are 24-bit
+             * (1.95 us/frame of port drain = 512k/s ceiling) so the port
+             * never blocks the loop at 384k. The free-run rate is the
+             * producer/consumer side effect the acceptance forbids:
+             * pops/s must equal R x host_rate. The accumulator below is the
+             * only rate authority on the wire; enabling it costs one timer
+             * op on an early loop (the loop runs 201 t/frame vs a 260 t
+             * stride, so it WILL absorb). */
+            if (csd_armed && !(pmask_wire & 2u))
             {
                 if (wireTicks == 0u)
                 {
