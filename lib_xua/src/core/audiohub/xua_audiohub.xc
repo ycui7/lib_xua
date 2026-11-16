@@ -252,6 +252,10 @@ unsigned g_csd_f_add_n = 0, g_csd_f_wnext = 0, g_csd_f_now2 = 0;
 unsigned g_csd_f_wnext2 = 0;   /* REVERT(dp177) */
 unsigned g_csd_dn_min = 0xFFFFFFFFu, g_csd_dn_max = 0;   /* REVERT(dp174) */
 unsigned g_csd_resync_n = 0;
+/* REVERT(s15-diag): receive_command wake attribution -- which c_aud command
+ * unwinds the audiohub loop (and thus re-runs AudioHwConfig) each time. */
+unsigned g_csd_cmd_tot = 0, g_csd_cmd_sr = 0, g_csd_cmd_start = 0;
+unsigned g_csd_cmd_stop = 0, g_csd_cmd_unh = 0, g_csd_cmd_last = 0;
 unsigned g_csd_adc_cnt[2] = {0, 0};
 unsigned g_csd_adc_or[2] = {0, 0};
 /* 2026-11-09 divider witness (assistant), for the four-way config question
@@ -1747,13 +1751,17 @@ static void receive_command(unsigned command,
                             unsigned &audioActive)
 {
     debug_printf("receive_command: %d\n", command);
+    /* REVERT(s15-diag): wake-code attribution (cold path). */
+    g_csd_cmd_tot++; g_csd_cmd_last = command;
     if(command == XUA_AUDCTL_SET_SAMPLE_FREQ)
     {
+        g_csd_cmd_sr++;
         curSamFreq = inuint(c_aud) * AUD_TO_USB_RATIO;
         debug_printf("receive_command set sr: %d\n", curSamFreq);
     }
     else if(command == XUA_AUD_SET_AUDIO_START)
     {
+        g_csd_cmd_start++;
         /* Off = 0
          * DOP = 1
          * Native = 2
@@ -1792,6 +1800,7 @@ static void receive_command(unsigned command,
     }
     else if (command == XUA_AUD_SET_AUDIO_STOP)
     {
+        g_csd_cmd_stop++;   /* REVERT(s15-diag) */
         debug_printf("aud stream stop\n");
         if(XUA_LOW_POWER_NON_STREAMING)
         {
@@ -1800,6 +1809,7 @@ static void receive_command(unsigned command,
     }
     else
     {
+        g_csd_cmd_unh++;    /* REVERT(s15-diag) */
         debug_printf("aud unhandled cmd  %u\n", command);
     }
     /* Not we do not ACK back here - it is done when we re-start audio */
