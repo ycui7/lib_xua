@@ -79,6 +79,12 @@ unsigned int fb_clocks[4];
 
 #if (MAX_FREQ != MIN_FREQ) || (XUA_LOW_POWER_NON_STREAMING && (XUA_SYNCMODE == XUA_SYNCMODE_ASYNC))
 /* Helper function to reset asynch feedback calculation when MCLK changes */
+/* CSD death forensics (2026-11-19): the SOF witness counter lives in
+ * csd_errlog.c (tile[0] statics rule); this task (XUD tile) beats it once
+ * per SOF notification — a plain, non-blocking call, hot-path cost ~nil. */
+void csd_errlog_sof_beat(void);
+unsigned csd_errlog_sof_cnt(void);
+
 static void resetAsynchFeedback(int &sofCount, unsigned &clocks, long long &clockcounter, unsigned &mod_from_last_time, unsigned sampleFreq)
 {
     sofCount = 0;
@@ -542,6 +548,12 @@ void XUA_Buffer_Ep(
 
             /* SOF notification from XUD_Manager() */
             case inuint_byref(c_sof, u_tmp):
+                /* CSD death forensics (2026-11-19): one increment per SOF
+                 * notification. The tile[0] board task samples it on its
+                 * 1 ms tick; no movement for 3 ms while the host link
+                 * should be alive = the SOF-LOST witness (csd_errlog).
+                 * Same tile, one store per 125 us: hot-path cost ~nil. */
+                csd_errlog_sof_beat();
 #if (XUA_SYNCMODE == XUA_SYNCMODE_SYNC)
                 unsigned usbSpeed;
                 GET_SHARED_GLOBAL(usbSpeed, g_curUsbSpeed);
