@@ -16,9 +16,11 @@ extern unsigned g_csd_usb_ratio;
 extern unsigned g_csd_ups_echo_mode;
 extern unsigned g_csd_ub_seq;
 extern int      g_csd_ub_pair[2];
+extern unsigned g_csd_probe_mask; /* REVERT(bench r8) */
 static inline unsigned csd_ub_defer_handoff(const unsigned samplesOut[])
 {
     if (g_csd_usb_ratio <= 1u || g_csd_ups_echo_mode != 2u) { return 0; }
+    if (g_csd_probe_mask & 128u) { return 0; } /* REVERT(bench r8): bit7 forces wire-side UBM under ECHO 2 */
     unsigned sq;
     asm volatile("ldw %0, dp[g_csd_ub_seq]" : "=r"(sq));
     sq++;
