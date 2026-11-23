@@ -30,7 +30,15 @@ static inline unsigned csd_ub_defer_handoff(const unsigned samplesOut[])
      * Mic semantics at armed ECHO 0 are unaffected for the host: the pop-side
      * publish (csd_dsp.xc armed block) carries the last wire pair into the
      * mic slots, and the deferred UBM's mic-slot writes land in the
-     * producer's scratch s_ub_mic exactly as in the ECHO 2 mode. */
+     * producer's scratch s_ub_mic exactly as in the ECHO 2 mode.
+     * 2026-11-22 (r2 clean-tone leg): ratio-2 was tried INLINE (the stock
+     * pre-defer path): SILENT (-100 dBFS, wire throttled to 16.6k/s — the
+     * ~8 us partner wake per exchange still starves the bit-timed loop at
+     * r2's exchange rate). DEFERRED r2 sounds but fails the clean-tone gate
+     * (comb f0-n*189.4 Hz, -30 dBFS, deterministic; seed 3/4 invariant, task
+     * feed reps ~0) — an unresolved r2 rate-servo/pacing wall, documented,
+     * NOT a reason to re-starve the wire. r4/r8 deferred measure CLEAN
+     * (41.1/41.5 dB margins). */
     if (g_csd_usb_ratio <= 1u || g_csd_ups_echo_mode == 1u) { return 0; }
     if (g_csd_probe_mask & 128u) { return 0; } /* REVERT(bench r8): bit7 forces wire-side UBM under ECHO 2 */
     unsigned sq;
