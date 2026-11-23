@@ -19,7 +19,19 @@ extern int      g_csd_ub_pair[2];
 extern unsigned g_csd_probe_mask; /* REVERT(bench r8) */
 static inline unsigned csd_ub_defer_handoff(const unsigned samplesOut[])
 {
-    if (g_csd_usb_ratio <= 1u || g_csd_ups_echo_mode != 2u) { return 0; }
+    /* 2026-11-22 (clean-tone campaign): defer whenever ARMED (ratio>1), not
+     * only under ECHO 2. Measured on the bench: armed ECHO 0 is SILENT at the
+     * DAC for every preset (-100 dBFS at the mic, all rates) — the inline
+     * wire-side UBM (~8 us partner wake) doubles the per-frame cost against a
+     * 260 t budget and throttles the wire to ~16.6k/s (xua_audiohub.xc
+     * CSD_XFER_TIMING note), starving the FD feed. ECHO 2 already deferred
+     * and sounded. ECHO 1 (feed-IN mirror) keeps the stock wire-side UBM
+     * call — that mode's whole point is mirroring the wire-side feed words.
+     * Mic semantics at armed ECHO 0 are unaffected for the host: the pop-side
+     * publish (csd_dsp.xc armed block) carries the last wire pair into the
+     * mic slots, and the deferred UBM's mic-slot writes land in the
+     * producer's scratch s_ub_mic exactly as in the ECHO 2 mode. */
+    if (g_csd_usb_ratio <= 1u || g_csd_ups_echo_mode == 1u) { return 0; }
     if (g_csd_probe_mask & 128u) { return 0; } /* REVERT(bench r8): bit7 forces wire-side UBM under ECHO 2 */
     unsigned sq;
     asm volatile("ldw %0, dp[g_csd_ub_seq]" : "=r"(sq));
