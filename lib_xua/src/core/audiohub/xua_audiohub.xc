@@ -236,6 +236,10 @@ extern int      g_csd_ps_latch1;
 /* REVERT(dp189): mailbox (csd_ps_ring.c). The L site seqlock-reads these;
  * asm ldw/stw names them by symbol, which needs file-global linkage. */
 extern unsigned g_csd_ps_mbox_seq;
+/* REVERT(dp209): queue claim words (csd_ps_ring.c, de-stated) + cursors. */
+extern int g_csd_ps_w0[8];
+extern int g_csd_ps_w1[8];
+extern unsigned g_csd_ps_consumed;
 extern unsigned g_csd_ps_starve;
 extern unsigned g_csd_ps_fresh;      /* REVERT(dp196): fresh clock */
 /* REVERT(dp196): attribution witnesses (defined csd_ps_ring.c, written the
@@ -813,14 +817,23 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                 if (wireTicks == 0u)
                 {
                     unsigned wf = csd_ups_diag_out_hz();
-                    /* REVERT(dp172): the out-rate lags the ratio hand-over —
-                     * the first armed iterations used to read 0 and latch
-                     * wireTicks = 100M/0 = 0xFFFFFFFF (witnessed: span_min
-                     * 0xFFFFFFFF). A bogus stride is unfulfillable: every
-                     * iteration blocks on a deadline 429 s away while the
-                     * ports ring-buffer their way past it. Only accept a
-                     * plausible wire rate. */
-                    if (wf >= 44100u && wf <= 768000u)
+                    /* REVERT(dp209): re-latch retry. The single-shot latch
+                     * reads out_hz at the FIRST armed iteration — before the
+                     * rate hand-over has published it (0 or stale), and it
+                     * never retried: wireTicks stayed 0, the whole floor was
+                     * skipped every iteration (f_add_n witness frozen at 0
+                     * across all campaigns — the tell we mis-read), and the
+                     * loop free-ran at machine rate (PROBE-32 iters 679k/s
+                     * at r2). The exchange gate then drained host pairs at
+                     * the iteration rate against the host refill: periodic
+                     * duplicate host frames = the comb. Retry every 8192
+                     * iterations until a plausible rate latches (3-4 latches
+                     * = one tile-timer read amortized ~0). */
+                    static unsigned wrl_n = 0u;
+                    if (++wrl_n >= 8192u) { wrl_n = 0u;   /* poll gate */ }
+                    else if (wireTicks == 0u && !(wf >= 44100u && wf <= 768000u))
+                    { /* keep waiting; retry */ }
+                    else if (wf >= 44100u && wf <= 768000u)
                     {
                         wireTicks = XS1_TIMER_HZ / wf;
                         wireRem   = XS1_TIMER_HZ % wf;
@@ -869,6 +882,24 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                     wireTmr when timerafter(wireNext) :> void;
                     { wireAcc += wireRem;
                       if (wireAcc >= wireF) { wireNext++; wireAcc -= wireF; } }
+                    /* REVERT(dp209): deadline-miss re-anchor (the csd_ps_thread
+                     * dp209 fix, same defect here). The pure accumulator has
+                     * no catch-up: once wireNext slips into the past (any deep
+                     * stall > 10 strides between the 256-frame resync polls,
+                     * or accumulated work>jitter drift), timerafter is
+                     * trivially satisfied forever and the loop FREE-RUNS at
+                     * machine rate (measured PROBE-32: wire_iters 679,007/s
+                     * vs the 384,000 it must run — the exchange gate then
+                     * drains host pairs at 339k/s against a 192k/s refill:
+                     * 50 % duplicate host frames = the comb, exactly the
+                     * quantified -14 dBFS signature). Re-anchor one stride
+                     * ahead when >1 stride behind; hysteresis keeps the
+                     * dp185 early-pass behaviour intact. */
+                    {   unsigned w_now; wireTmr :> w_now;
+                        if ((int)(w_now - wireNext) > (int)wireTicks)
+                        { wireNext = w_now + wireTicks; wireAcc = 0u;
+                          g_csd_resync_n++; }
+                    }
                     wireNext += wireTicks;
                     if (++wireStal >= 256u)
                     {
@@ -1129,6 +1160,7 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                          * the previous frame -> honest repeat + starve
                          * witness, same semantics the claim gave. */
                         if (g_csd_ps_active) {
+                            g_csd_wire_s1++; /* dp209: L-region liveness witness */
                             /* REVERT(dp199b): ONE seq read. The dp189
                              * bracket form (two seq ldw + compare + retry
                              * test per frame) existed to catch preemption
@@ -1365,28 +1397,41 @@ unsigned static AudioHub_MainLoop(chanend ?c_aud, chanend ?c_spd_out
                 {
                     unsigned seg2a; if (pmask_wire & 16u) tseg :> seg2a;
                     if (g_csd_ps_active) {
-                        unsigned s1 = 1u, try_n = 0u;
-                        for (;;) {
-                            asm volatile("ldw %0, dp[g_csd_ps_mbox_seq]"
-                                         : "=r"(s1));
-                            if ((s1 & 1u) == 0u) {
-                                csd_l0 = (unsigned)g_csd_ps_mbox_w0;
-                                csd_l1 = (unsigned)g_csd_ps_mbox_w1;
-                                break;
+                        g_csd_wire_s2++; /* dp209: R-region liveness witness */
+                        /* REVERT(dp209b): claim EVERY iteration — the
+                         * iteration is the frame (dp189 rate_probe: mask0
+                         * == mask2 == 383.5k, the port-paced rate: the
+                         * buffered LRCLK/DAC OUTs block at drain depth and
+                         * ARE the pacer; the dp172 floor is off by default
+                         * and was never the authority). The dp209 parity
+                         * gate (claim every 2nd accept) therefore dropped
+                         * a pair per frame: every second frame emitted the
+                         * HELD pair — a hard 2:1 duplicate-frame stream,
+                         * the exact comb generator (margin unchanged at
+                         * -5.9 dB with fresh==wire because BOTH counted
+                         * the halved claim beat). One claim, one frame,
+                         * one pair — full stop. */
+                        static unsigned csd_wn_parity = 0u; (void)csd_wn_parity;
+                        {
+                            g_csd_wire_n++;
+                            unsigned want, seq;
+                            asm volatile("ldw %0, dp[g_csd_ps_consumed]" : "=r"(want));
+                            asm volatile("ldw %0, dp[g_csd_ps_seq]" : "=r"(seq));
+                            if (seq != want) {
+                                unsigned i = want & 7u;
+                                csd_l0 = (unsigned)g_csd_ps_w0[i];
+                                csd_l1 = (unsigned)g_csd_ps_w1[i];
+                                unsigned nw = want + 1u;
+                                asm volatile("stw %0, dp[g_csd_ps_consumed]" :: "r"(nw));
+                                g_csd_ps_fresh++;   /* PACE: claims/s */
+                            } else if (pmask_wire & 32u) {
+                                unsigned sv;
+                                asm volatile("ldw %0, dp[g_csd_ps_starve]"
+                                             : "=r"(sv));
+                                sv++;
+                                asm volatile("stw %0, dp[g_csd_ps_starve]"
+                                             :: "r"(sv));
                             }
-                            if (++try_n >= 3u) break;
-                        }
-                        g_csd_wire_n++;
-                        if (s1 != csd_mbox_last && !(s1 & 1u)) {
-                            g_csd_ps_fresh++;
-                            csd_mbox_last = s1;
-                        } else if (pmask_wire & 32u) {
-                            unsigned sv;
-                            asm volatile("ldw %0, dp[g_csd_ps_starve]"
-                                         : "=r"(sv));
-                            sv++;
-                            asm volatile("stw %0, dp[g_csd_ps_starve]"
-                                         :: "r"(sv));
                         }
                         samplesOut[0] = csd_l0;   /* keep samplesOut honest
                                                    * for diagnostics, but the

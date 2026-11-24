@@ -394,7 +394,14 @@ void usb_audio_io(chanend ?c_aud_in,
          * csd_ps_ring.c + extern. dp161: wire-word producer at wire cadence,
          * own tile core (the AudioHub-internal-par placement stalled
          * mic-stream enumeration). NOTE(dp167): must stay UNCONDITIONAL —
-         * EXTRA_BUILD_FLAGS provably never reach compilation. */
+         * EXTRA_BUILD_FLAGS provably never reach compilation.
+         * dp209 2026-11-23: RESTORED on tile[0]. The tile[1] experiment
+         * (user_main.h CSD_PS_TILE1_ENTRY) measured NO change in the pass
+         * cycle (window witness 337 t both tiles): the pop's cross-DS
+         * traffic is remote either way, and tile[1]'s core additionally
+         * hosts the EQ/feed bursts. dp188 proved the wire rate is NOT
+         * producer-contended, so tile[0] is the correct home; the pass
+         * itself was slimmed (witness stores /16 or PROBE-gated). */
         {
             thread_speed();
             csd_ps_thread();
