@@ -285,6 +285,9 @@ unsigned g_csd_wire_iter = 0;   /* dp225b: MAIN-LOOP heartbeat at file scope (te
 extern unsigned g_csd_p_ubmn;            /* witness (csd_ps_ring.c) */
 static unsigned s_ub_seen = 0u;          /* dp215b: drain cursor (this TU only) */
 extern unsigned g_csd_wl_pass, g_csd_wl_claim, g_csd_wl_emit;  /* csd_ps_ring.c */
+extern unsigned g_csd_wl_pass;
+extern unsigned g_csd_wl_r2, g_csd_wl_claim2;   /* dp225g: LRCLK edges / i2s writes */
+extern unsigned g_csd_pt_drain, g_csd_pt_prod;   /* dp225g: HSC call-site witnesses (csd_ps_ring.c) */
 extern unsigned g_csd_wl_drain, g_csd_wl_acc;
 extern unsigned g_csd_wl_pass2, g_csd_wl_r2, g_csd_wl_claim2;   /* dp216b */
 extern unsigned csd_ub_feed_owner;       /* csd_ps_ring.c; read by csd_dsp.xc fallback */
@@ -565,6 +568,7 @@ unsigned xua_csd_get_mic_phase(void)
 
 static inline int HandleSampleClock(int frameCount, buffered _XUA_CLK_DIR port:32 p_lrclk, int first_frame)
 {
+    g_csd_wl_claim++;   /* dp225g: HSC ENTRY count */
 #if CODEC_MASTER
     unsigned syncError = 0;
     unsigned lrval = 0;
@@ -634,6 +638,7 @@ static inline int HandleSampleClock(int frameCount, buffered _XUA_CLK_DIR port:3
 
     if(XUA_I2S_N_BITS == 32)
     {
+        g_csd_wl_r2++;   /* dp225g: LRCLK EDGE counter (FS = rate/2) */
         p_lrclk <: clkVal;
         asm volatile(" getts %0, res[%1]" : "=r" (port_ts) : "r" (p_lrclk));
         /* REVERT(dp192 TRIED, REVERTED dp193): gating this getts behind
@@ -965,7 +970,7 @@ unsigned static AudioHub_MainLoop(chanend ceCsdPop_, chanend ceCsdUbR_,
                      * nothing but the port ops -- one pair of words is in
                      * flight, the hold-last mailbox semantics already ran
                      * that way (producer leads by one pair). */
-                    syncError += HandleSampleClock(0, p_lrclk, skip_ts_check);
+                    g_csd_wl_pass++; syncError += HandleSampleClock(0, p_lrclk, skip_ts_check);
                     unsigned sb4a; if (pmask_wire & 16u) tseg :> sb4a;
                     {   unsigned w;
                     if (1)
@@ -1091,7 +1096,7 @@ unsigned static AudioHub_MainLoop(chanend ceCsdPop_, chanend ceCsdUbR_,
 
 #if (I2S_CHANS_ADC != 0 || I2S_CHANS_DAC != 0)
                 if (1)   /* dp225e: vendor emit always live (armed differs only by the samplesOut claim overwrite) */
-                    syncError += HandleSampleClock(frameCount, p_lrclk, skip_ts_check);
+                    g_csd_wl_drain++; syncError += HandleSampleClock(frameCount, p_lrclk, skip_ts_check);
 #endif
                 if (pmask_wire & 16u)
                 { unsigned seg0b; tseg :> seg0b; g_csd_seg[0] += seg0b - seg0a; }
@@ -1099,7 +1104,7 @@ unsigned static AudioHub_MainLoop(chanend ceCsdPop_, chanend ceCsdUbR_,
                 {
                     /* REVERT(dp200): LRCLK1+DACR queued at the half-frame
                      * boundary (see the split-emit note above). */
-                    syncError += HandleSampleClock(1, p_lrclk, skip_ts_check);
+                    g_csd_pt_drain++; syncError += HandleSampleClock(1, p_lrclk, skip_ts_check);
                     unsigned sb5a; if (pmask_wire & 16u) tseg :> sb5a;
                     /* One wire carries both halves (I2S_WIRES_DAC==1): the
                      * stock L/R loops each restart index at 0, i.e. both
@@ -1223,6 +1228,7 @@ unsigned static AudioHub_MainLoop(chanend ceCsdPop_, chanend ceCsdUbR_,
                     /* REVERT(dp199-attr): DAC-L out slice (bit4). */
                     unsigned sb4a; if (pmask_wire & 16u) tseg :> sb4a;
                     g_csd_wl_emit++;   /* dp216: emit reached */
+                    g_csd_wl_claim2++; /* dp225g: DAC i2s WRITE counter (=2/iter) */
                     if(XUA_I2S_N_BITS == 32)
                         p_i2s_dac[index++] <: bitrev(samplesOut[frameCount +i]);
                     else
@@ -1377,7 +1383,7 @@ unsigned static AudioHub_MainLoop(chanend ceCsdPop_, chanend ceCsdUbR_,
 
 #if (I2S_CHANS_ADC != 0 || I2S_CHANS_DAC != 0)
                 if (1)   /* dp225e: vendor emit always live (armed differs only by the samplesOut claim overwrite) */
-                    syncError += HandleSampleClock(frameCount, p_lrclk, skip_ts_check);
+                    g_csd_pt_prod++; syncError += HandleSampleClock(frameCount, p_lrclk, skip_ts_check);
 #endif
                 if (pmask_wire & 16u)
                 { unsigned seg1b; tseg :> seg1b; g_csd_seg[1] += seg1b - seg1a; }
