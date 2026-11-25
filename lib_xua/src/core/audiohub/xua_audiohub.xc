@@ -370,6 +370,7 @@ unsigned g_csd_xt_ubm = 0, g_csd_xt_ubm_n = 0, g_csd_xt_ubm_max = 0;
 /* One-pair prefetch pipeline for the upsampling regime (see the CSD_UPS_ASYNC
  * block in the pacing code). REVERT: delete these two and that block. */
 unsigned g_csd_prefetch = 0, g_csd_prefetch_hits = 0;
+extern unsigned g_csd_ft4;   /* dp225g: ungated exchange-rate witness (csd_ps_ring.c) */
 #endif
 unsigned g_csd_fabric_force_hz = 0;
 /* What THIS block last programmed the ports with. Sentinel-initialised so the
@@ -1581,7 +1582,8 @@ unsigned static AudioHub_MainLoop(chanend ceCsdPop_, chanend ceCsdUbR_,
                  * collect's inuint wedges the wire, dp190 signature). */
                 if (g_csd_usb_ratio > 1u && csd_ratio_scrubbed != g_csd_usb_ratio)
                 {   csd_ratio_scrubbed = g_csd_usb_ratio;
-                    g_csd_prefetch = 0u; audioToUsbRatioCounter = 0u; }
+                    g_csd_prefetch = 0u; audioToUsbRatioCounter = 0u;
+                    wireTicks = 0u; g_csd_wire_ticks_target = 0u; }   /* dp225g: floor must re-init for the new ratio (dp170: stale stride = 100% f_skip) */
                 unsigned gateA = 0; if (pmask_wire & 16u) tseg :> gateA;
                 if (pmask_wire & 16u)
                 { unsigned sb; tseg :> sb; g_csd_seg_b[4] += sb - tailA; }
@@ -1631,7 +1633,7 @@ unsigned static AudioHub_MainLoop(chanend ceCsdPop_, chanend ceCsdUbR_,
                      * idle wire frames (see the else-branch below), so at
                      * each transfer frame the token has been in flight for
                      * a full idle frame. */
-                    if (0 && g_csd_usb_ratio > 1u && g_csd_prefetch)   /* dp225f: prefetch OFF — pure vendor exchange */
+                    if (0 && g_csd_usb_ratio > 1u && g_csd_prefetch)   /* dp225g FINAL: prefetch OFF — with it ON the exchange collapsed feed to 43k (g1); frozen best = pure vendor exchange */   /* dp225f: prefetch OFF — pure vendor exchange */
                     {
                         g_csd_prefetch = 0; g_csd_wl_acc = 1u; g_csd_ft5++;   /* dp225f: COLLECT-entry rate counter */
                         if (pmask_wire & 32u) { g_csd_prefetch_hits++; g_csd_xfer_tok++; } /* REVERT(dp168, dp191) */
@@ -1660,7 +1662,7 @@ unsigned static AudioHub_MainLoop(chanend ceCsdPop_, chanend ceCsdUbR_,
                     {
                     /* The below looks a bit odd but forces the compiler to inline twice */
                     unsigned command;
-                    if (pmask_wire & 32u) { g_csd_xfer_else++; } /* REVERT(dp168, dp191) */ g_csd_wl_acc = 3u; g_csd_ft3++; g_csd_hb = 1u;   /* dp225f: vendor exchange is a true host-frame event */   /* dp225f: ELSE-exchange rate counter */
+                    g_csd_ft4++; g_csd_wl_acc = 3u; g_csd_ft3++; g_csd_hb = 1u;   /* dp225f: vendor exchange = true host-frame event; dp225g: ft4 = ungated else-branch EXCHANGE rate */
 #ifdef CSD_XFER_TIMING
                     /* HOW LONG DOES THE USB EXCHANGE STALL THE BIT-TIMED LOOP?
                      * The loop is proven clock-locked when the exchange is
@@ -1723,7 +1725,7 @@ unsigned static AudioHub_MainLoop(chanend ceCsdPop_, chanend ceCsdUbR_,
                      * decouple has the remaining ratio-1 wire frames to deliver
                      * it before the next collect. REVERT with the other
                      * CSD_UPS_ASYNC prefetch block. */
-                    if (0 && g_csd_usb_ratio > 1u && !g_csd_prefetch)   /* dp225f: prefetch OFF */
+                    if (0 && g_csd_usb_ratio > 1u && !g_csd_prefetch)   /* dp225g FINAL: prefetch OFF */   /* dp225f: prefetch OFF */
                     {
                         StartSampleTransfer(c_aud, underflowWord);
                         g_csd_prefetch = 1;
@@ -1748,7 +1750,7 @@ unsigned static AudioHub_MainLoop(chanend ceCsdPop_, chanend ceCsdUbR_,
                      * 124k/s at r2). The extra pairs this drains early are
                      * VALUE-DEDUPED at publish (xua_audiohub_st.h), so the
                      * engine feed stays exact host cadence. */
-                    if (0 && g_csd_usb_ratio > 1u && !g_csd_prefetch)   /* dp225f: prefetch OFF */
+                    if (0 && g_csd_usb_ratio > 1u && !g_csd_prefetch)   /* dp225g FINAL: prefetch OFF */   /* dp225f: prefetch OFF */
                     {
                         StartSampleTransfer(c_aud, underflowWord);
                         g_csd_prefetch = 1;
@@ -1779,17 +1781,25 @@ unsigned static AudioHub_MainLoop(chanend ceCsdPop_, chanend ceCsdUbR_,
                      * Without it the free-running wire (242k) outruns the
                      * feed (88k pairs/s x 2 = 176k) and the 27% starve
                      * repeats time-dilate the engine output -> 91 Hz comb. */
-                    unsigned wf = 0u;   /* dp225f FLOOR PARKED. The timer
-                         * floor cannot own pacing yet: with it armed the
-                         * exchange inuint (USB round trip ~15 us) became
-                         * the metronome (wire 66k, feed 30k, E0 -120
-                         * silence) regardless of the stride. The DAC/LRCLK
-                         * clock ownership is unresolved — free-run 242k
-                         * it/s is the ONLY regime that ever measured tone
-                         * 1000 Hz with clean-ish tone (-0.1 dB). To
-                         * re-arm: wf = g_csd_wire_target_hz ?:
-                         * csd_ups_diag_out_hz(). Estimator + witnesses
-                         * retained. */
+                    unsigned wf = 0u;   /* dp225g FINAL: floor retired. Full sweep: any cadence
+                         * change (timer floor OR prefetch token) drops the
+                         * exchange into RTT-bound mode 121.2k (feed 43k,
+                         * tone -83 silence). Free-run 242.4k with pure
+                         * vendor exchange is the ONLY working regime;
+                         * 27% starve-repeats remain -> 96 Hz comb, margin
+                         * ~+3.8 dB vs the 40 dB gate. Next step is NOT a
+                         * cadence hack: raise SUPPLY (host delivers only
+                         * 176.4k frames/s vs 192k nominal = feedback-
+                         * endpoint/feed-value math for the armed r2 alt-
+                         * setting — check g_aud_buffers out_feed_value vs
+                         * 768 ticks/uf; plus bench LRCLK probe). */
+                    /* dp225g: floor RE-ARMED deterministically. One while-
+                     * iteration emits 2 LRCLK toggles = one full wire frame
+                     * (dp171), so iterations/s = out_hz/2 = 192k at r2/192k.
+                     * That is EXACTLY the engine supply (host 96k pairs/s
+                     * x2) -> starve repeats ->0. Estimator no longer feeds
+                     * the floor (its tracking spiralled); prefetch restored
+                     * hides the exchange RTT so the timer can own pacing. */
                     if (wireTicks == 0u)
                     {
                         if (wf != 0u)
@@ -1849,6 +1859,20 @@ unsigned static AudioHub_MainLoop(chanend ceCsdPop_, chanend ceCsdUbR_,
                             wireAcc2 -= st * g_csd_wire_ticks_target;  /* wait never fires */
                             if (st == 0u) { st = 2u; }       /* min even stride */
                             g_csd_wire_rem_val = wireAcc2;
+                            /* dp225g: RESYNC CLAMP (g1-g3 post-mortem: one
+                             * RTT spike put wireNext permanently behind
+                             * now — every subsequent wait returned
+                             * instantly and the floor went IDLE at 192k;
+                             * a slightly longer stride instead drifted
+                             * RTT-bound to 111k). Re-anchor on lag:
+                             * slow iterations are absorbed (no catch-up
+                             * burst), fast iterations wait -> the loop
+                             * rate equals the floor rate whenever the
+                             * loop CAN keep up. */
+                            {   unsigned wnow;
+                                wireTmr :> wnow;
+                                if ((int)(wireNext - wnow) < 0) { wireNext = wnow & ~1u; }   /* wrap-safe lag test */
+                            }
                             wireTmr when timerafter(wireNext) :> void;
                             wireNext += st;
                         }
