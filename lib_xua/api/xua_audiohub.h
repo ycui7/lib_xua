@@ -53,6 +53,8 @@
  *  \param c_pdm_in             Channel for receiving decimated PDM samples
  */
 void XUA_AudioHub(
+    chanend c_csd_pop,        /* dp225: channel data-plane to the producer (csd_ps_thread.xc) */
+    chanend c_csd_ub_r,
     NULLABLE_RESOURCE(chanend, c_aud),
     NULLABLE_RESOURCE(clock, clk_audio_mclk),
     NULLABLE_RESOURCE(clock, clk_audio_bclk), NULLABLE_RESOURCE(in_port_t, p_mclk_in)

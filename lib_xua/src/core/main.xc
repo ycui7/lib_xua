@@ -26,6 +26,7 @@
 #include "uac_hwresources.h"
 
 void csd_ps_thread(void); /* REVERT(dp161): remove with csd_ps_thread.xc */
+extern void csd_ps_thread_t1(chanend, chanend); /* dp225: called WITH chan => peer end auto-binds */
 
 #if (XUA_SPDIF_RX_EN || XUA_SPDIF_TX_EN)
 #include "spdif.h"                     /* From lib_spdif */
@@ -294,7 +295,8 @@ void SpdifTxWrapper(chanend c_spdif_tx)
 }
 #endif
 
-void usb_audio_io(chanend ?c_aud_in,
+void usb_audio_io(chanend ceCsdPop, chanend ceCsdUbR,
+                  chanend ?c_aud_in,
 #if (XUA_SPDIF_TX_EN) && (XUA_SPDIF_TX_TILE_NUM != XUA_AUDIO_IO_TILE_NUM)
     chanend c_spdif_tx,
 #endif
@@ -341,7 +343,6 @@ void usb_audio_io(chanend ?c_aud_in,
 
 #if (XUA_SPDIF_TX_EN) && (XUA_SPDIF_TX_TILE_NUM == XUA_AUDIO_IO_TILE_NUM)
     chan c_spdif_tx;
-
     /* Setup S/PDIF tx port - note this is done before par since sharing clock-block/port */
     spdif_tx_port_config(p_spdif_tx, clk_audio_mclk, p_mclk_in, 7);
 #endif
@@ -371,7 +372,7 @@ void usb_audio_io(chanend ?c_aud_in,
 #else
 #define AUDIO_CHANNEL c_aud_in
 #endif
-            XUA_AudioHub(AUDIO_CHANNEL, clk_audio_mclk, clk_audio_bclk, p_mclk_in, p_lrclk, p_bclk, p_i2s_dac, p_i2s_adc
+            XUA_AudioHub(ceCsdPop, ceCsdUbR, AUDIO_CHANNEL, clk_audio_mclk, clk_audio_bclk, p_mclk_in, p_lrclk, p_bclk, p_i2s_dac, p_i2s_adc
 #if (XUA_SPDIF_TX_EN) //&& (XUA_SPDIF_TX_TILE_NUM != XUA_AUDIO_IO_TILE_NUM)
                 , c_spdif_tx
 #endif
@@ -671,7 +672,7 @@ int main()
         on tile[XUA_AUDIO_IO_TILE_NUM]:
         {
             /* Audio I/O task, includes mixing etc */
-            usb_audio_io(
+            usb_audio_io(cCsdPop, cCsdUbR, 
 #if (NUM_USB_CHAN_OUT > 0) || (NUM_USB_CHAN_IN > 0) || XUA_HID_ENABLED || defined(MIDI)
                 /* Connect audio system to XUA_Buffer(); */
                 c_mix_out

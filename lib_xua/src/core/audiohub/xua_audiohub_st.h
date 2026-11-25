@@ -14,9 +14,12 @@
  * cross-thread, and the compiler must not hoist any of it. */
 extern unsigned g_csd_usb_ratio;
 extern unsigned g_csd_ups_echo_mode;
+extern unsigned g_csd_hb;   /* dp224 host-frame flag (set at c_aud complete, csd_ps_ring.c def) */
 extern unsigned g_csd_ub_seq;
-extern int      g_csd_ub_pair[2];
+extern int g_csd_ub_pair[2];
 extern unsigned g_csd_probe_mask; /* REVERT(bench r8) */
+extern unsafe chanend g_cePop;   /* dp225e: single pop chan global */
+extern unsigned g_csd_wire_iter;   /* dp225b: main-loop heartbeat (vendor TU) */   /* dp225: opened by the audiohub task; 'unsafe' storage like the proven uc_audiohw1 (plain file-scope chanend is rejected) */
 static inline unsigned csd_ub_defer_handoff(const unsigned samplesOut[])
 {
     /* 2026-11-22 (clean-tone campaign): defer whenever ARMED (ratio>1), not
@@ -41,17 +44,51 @@ static inline unsigned csd_ub_defer_handoff(const unsigned samplesOut[])
      * (41.1/41.5 dB margins). */
     if (g_csd_usb_ratio <= 1u || g_csd_ups_echo_mode == 1u) { return 0; }
     if (g_csd_probe_mask & 128u) { return 0; } /* REVERT(bench r8): bit7 forces wire-side UBM under ECHO 2 */
-    unsigned sq;
-    asm volatile("ldw %0, dp[g_csd_ub_seq]" : "=r"(sq));
-    sq++;
-    asm volatile("stw %0, dp[g_csd_ub_seq]" :: "r"(sq));   /* odd: window */
+    /* dp220 2026-11-23 (owner directive: diagnostics must not touch the
+     * timed path): publish ONE slot per HOST frame, not per exchange. The
+     * exchange runs at fabric rate (384k) and the XUD side replays the
+     * held pair on the R-1 filler exchanges; publishing the replay made
+     * the consumer see R copies of every pair. Counter-free cadence: a
+     * new pair is only available once every g_csd_usb_ratio exchanges. */
+    /* dp223f/g (measured + arithmetic): ONE main-loop pass emits BOTH L and
+     * R port frames, so the exchange runs at wire/2 = 192k for every
+     * family ratio, while the true host-frame rate is wire/R. Publish
+     * cadence = every (R/2)-th exchange  =>  host-rate, exact:
+     * r2: every 1 (192k host), r4: every 2, r8: every 4. (dp220A's /R
+     * over-divided r2 to 96k = half feed -> wire honest-repeat 28 %;
+     * publish-every-exchange would feed r8's held XUD replays 4x.)
+     * Even ratios only (2/4/8) — the family set. */
+    /* dp224: cadence = the TRUE host-frame event, not a guessed divide.
+     * g_csd_hb is set once per completed USB OUT transfer (the c_aud
+     * CompleteSampleTransferUsbChans site in xua_audiohub.xc, same
+     * sanctioned functional region) and consumed here. The main-loop pass
+     * rate free-runs with the port buffers (measured 169k-300k for a
+     * 384k wire), so every /R formula drifts against the host grid and
+     * amplitude-modulates the feed (r2 comb: 172 Hz sideband family,
+     * 656/828/999 Hz, tone -41 vs combs -38). 3 plain memory ops. */
+    if (g_csd_hb == 0u) { return 1; }   /* replay exchange: swallow */
+    g_csd_hb = 0u;
+    /* dp225f: VALUE-DEDUP REMOVED. It keyed on samplesOut equality; a
+     * constant test stream (/dev/zero, silence) has every GENUINE pair
+     * equal, so the heuristic swallowed 8191 of every 8192 true host
+     * frames (publish collapsed to 30/s, feed starved, engine repeated
+     * boot input). The queue's own seqlock makes replays harmless: the
+     * engine consumes one pair per two output frames at the same exchange
+     * cadence, so phase advance is structurally exact without dedup. */
+    /* dp220b: on the TRUE host frame, publish below AND return 0 so the
+     * vendor's inline UserBufferManagement(samplesOut,..) runs this one
+     * exchange — its armed fast path (csd_dsp.xc dp220) feeds the FD FIR.
+     * Vendor-designed call site, host-rate cadence, ~15 t body. */
+    /* dp223c: plain C seqlock on volatile canonical objects (see the
+     * claim block note in xua_audiohub.xc for why dp[] asm cannot work
+     * across tile/task data segments). */
     unsigned a = samplesOut[0], b = samplesOut[1];
-    asm volatile("stw %0, dp[g_csd_ub_pair]"   :: "r"(a));
-    asm volatile("stw %0, dp[g_csd_ub_pair+4]" :: "r"(b));
-    sq++;
-    asm volatile("stw %0, dp[g_csd_ub_seq]" :: "r"(sq));   /* even: done */
-    return 1;
-}
+    unsigned sq = g_csd_ub_seq + 1u;
+    g_csd_ub_seq = sq;                 /* odd: window */
+    g_csd_ub_pair[0] = (int)a;
+    g_csd_ub_pair[1] = (int)b;
+    g_csd_ub_seq = sq + 1u;            /* even: done */
+    return 0;   /* dp220b: vendor inline UBM runs on the true host frame */}
 #endif
 
 static inline void StartSampleTransfer(chanend ?c_aud, const unsigned underflowWord)
