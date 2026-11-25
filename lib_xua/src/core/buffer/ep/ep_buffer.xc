@@ -33,6 +33,7 @@ extern unsigned int g_curSamFreqMultiplier;
 /* Initialise g_speed now so we get a sensible packet size until we start properly calculating feedback in the SoF case */
 /* Without this, zero size input packets fill the input FIFO and it takes a long time to clear out when feedback starts */
 /* This can cause a delay to the decouple ISR being serviced pushing our I2S timing. Initialising solves this */
+extern unsigned g_csd_fb_freeze;   /* dp225h: app sets while CSD family armed */
 unsigned g_speed = (XUA_USB_BUS_SPEED == 2) ? (DEFAULT_FREQ/8000) << 16 : (DEFAULT_FREQ/1000) << 16;
 unsigned g_streamChangeOngoing = 0; /* Not cleared until audio has completed it's SR change. This can be used for logic that needs to know audio has completed the command */
 unsigned g_feedbackValid = 0;
@@ -695,17 +696,20 @@ void XUA_Buffer_Ep(
 
                         {
                             int usb_speed;
-                            asm volatile("stw %0, dp[g_speed]"::"r"(clocks));   // g_speed = clocks
+                            {   unsigned fbc = g_csd_fb_freeze
+                ? (unsigned)((((int64_t)sampleFreq) << 16) / 8000u   /* HS-only board (dp225h) */)
+                : clocks;   /* dp225h: armed -> FORCE nominal (pre-arm SOF window measured a 44.1-family value: host stuck at 176413 = 22.05 smp/uf) */
+    asm volatile("stw %0, dp[g_speed]"::"r"(fbc)); }
 
                             GET_SHARED_GLOBAL(usb_speed, g_curUsbSpeed);
 
                             if (usb_speed == XUD_SPEED_HS)
                             {
-                                (fb_clocks, unsigned[])[0] = clocks;
+                                (fb_clocks, unsigned[])[0] = g_csd_fb_freeze ? (unsigned)((((int64_t)sampleFreq) << 16) / 8000) : clocks;   /* dp225h */
                             }
                             else
                             {
-                                (fb_clocks, unsigned[])[0] = clocks >> 2;
+                                (fb_clocks, unsigned[])[0] = g_csd_fb_freeze ? (unsigned)((((int64_t)sampleFreq) << 16) / 1000) >> 2 : (clocks >> 2);   /* dp225h */
                             }
                         }
                         clockcounter = 0;
@@ -755,17 +759,20 @@ void XUA_Buffer_Ep(
                             clocks < (expected_fb + FB_TOLERANCE))
 #endif
                         {
-                            asm volatile("stw %0, dp[g_speed]"::"r"(clocks));   // g_speed = clocks
+                            {   unsigned fbc = g_csd_fb_freeze
+                ? (unsigned)((((int64_t)sampleFreq) << 16) / 8000u   /* HS-only board (dp225h) */)
+                : clocks;   /* dp225h: armed -> FORCE nominal (pre-arm SOF window measured a 44.1-family value: host stuck at 176413 = 22.05 smp/uf) */
+    asm volatile("stw %0, dp[g_speed]"::"r"(fbc)); }
 
                             GET_SHARED_GLOBAL(usb_speed, g_curUsbSpeed);
 
                             if (usb_speed == XUD_SPEED_HS)
                             {
-                                fb_clocks[0] = clocks;
+                                fb_clocks[0] = g_csd_fb_freeze ? (unsigned)((((int64_t)sampleFreq) << 16) / 8000) : clocks;   /* dp225h: force nominal */
                             }
                             else
                             {
-                                fb_clocks[0] = clocks >> 2;
+                                fb_clocks[0] = g_csd_fb_freeze ? (unsigned)((((int64_t)sampleFreq) << 16) / 1000) >> 2 : (clocks >> 2);   /* dp225h */
                             }
                         }
 #ifdef FB_TOLERANCE_TEST
